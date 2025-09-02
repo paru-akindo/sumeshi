@@ -111,9 +111,8 @@ if st.button("シミュレーション開始"):
             "バフ":             label,
             "到達時刻":         (now_jst + timedelta(seconds=t0)).strftime("%Y-%m-%d %H:%M"),
             "所要時間":         f"{t0//3600}h {(t0%3600)//60}m",
-            "自動修練(万)":    f"{int(m0)//10000}",
-            "時間仙草修練(万)": f"{int(th0)//10000}",
-            "アイテム修練(万)": "0"
+            "自動":    f"{int(m0)//10000}",
+            "仙草": f"{int(th0)//10000}",
         })
     st.markdown("## 未使用")
     st.table(pd.DataFrame(rows_unused))
@@ -135,9 +134,9 @@ if st.button("シミュレーション開始"):
                 "バフ":             label,
                 "到達時刻":         (now_jst + timedelta(seconds=t1)).strftime("%Y-%m-%d %H:%M"),
                 "所要時間":         f"{t1//3600}h {(t1%3600)//60}m",
-                "自動修練(万)":    f"{int(m1)//10000}",
-                "時間仙草修練(万)": f"{int(th1)//10000}",
-                "アイテム修練(万)": f"{int(item_pts)//10000}"
+                "自動":    f"{int(m1)//10000}",
+                "仙草": f"{int(th1)//10000}",
+                "アイテム": f"{int(item_pts)//10000}"
             })
         st.markdown(f"## {used_items}個使用")
         st.table(pd.DataFrame(rows_used))
