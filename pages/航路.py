@@ -194,8 +194,8 @@ for port in PORTS_CFG:
         all_populated = False
         missing_ports.append(port)
 
-show_price_table = st.checkbox("価格表を表示（実価格）", value=False, key="chk_price_table")
-show_correction_table = st.checkbox("補正表を表示（基礎値差）", value=False, key="chk_corr_table")
+show_price_table = st.checkbox("実価格", value=False, key="chk_price_table")
+show_correction_table = st.checkbox("割引率", value=False, key="chk_corr_table")
 
 if "mode" not in st.session_state:
     st.session_state["mode"] = "view"
@@ -397,13 +397,19 @@ if st.session_state.get("mode") == "admin":
             sel_missing = st.selectbox("編集する未更新港", options=missing_ports, key="sel_missing_admin")
             st.markdown(f"## {sel_missing} の入力（未更新）")
             current = PRICES_CFG.get(sel_missing, {})
-            cols = st.columns(2)
+            # 行ごとに2カラムで入力フィールドを作る（表示順を安定）
             inputs_miss = {}
-            for i, (name, base) in enumerate(ITEMS_CFG):
-                c = cols[i % 2]
+            for row_start in range(0, len(ITEMS_CFG), 2):
+                c_left, c_right = st.columns(2)
+                name, base = ITEMS_CFG[row_start]
                 default = "" if name not in current else str(current[name])
-                with c:
+                with c_left:
                     inputs_miss[name] = st.text_input(f"{name} (base: {base})", value=default, key=f"{sel_missing}_{name}_miss_admin")
+                if row_start + 1 < len(ITEMS_CFG):
+                    name2, base2 = ITEMS_CFG[row_start + 1]
+                    default2 = "" if name2 not in current else str(current[name2])
+                    with c_right:
+                        inputs_miss[name2] = st.text_input(f"{name2} (base: {base2})", value=default2, key=f"{sel_missing}_{name2}_miss_admin")
 
             col_ok_miss, col_reset_miss, col_refresh_miss = st.columns([1,1,1])
             with col_ok_miss:
@@ -473,13 +479,19 @@ if st.session_state.get("mode") == "admin":
         sel_port_all = st.selectbox("編集する港を選択", options=PORTS_CFG, key="sel_port_all_admin")
         st.markdown(f"## {sel_port_all} の価格（編集可）")
         current_row = PRICES_CFG.get(sel_port_all, {})
-        cols2 = st.columns(2)
+        # 行ごとに2カラムで入力フィールドを作る（表示順を安定）
         inputs_all = {}
-        for i, (name, base) in enumerate(ITEMS_CFG):
-            c = cols2[i % 2]
+        for row_start in range(0, len(ITEMS_CFG), 2):
+            c_left, c_right = st.columns(2)
+            name, base = ITEMS_CFG[row_start]
             default = "" if name not in current_row else str(current_row[name])
-            with c:
+            with c_left:
                 inputs_all[name] = st.text_input(f"{name} (base: {base})", value=default, key=f"{sel_port_all}_{name}_all_admin")
+            if row_start + 1 < len(ITEMS_CFG):
+                name2, base2 = ITEMS_CFG[row_start + 1]
+                default2 = "" if name2 not in current_row else str(current_row[name2])
+                with c_right:
+                    inputs_all[name2] = st.text_input(f"{name2} (base: {base2})", value=default2, key=f"{sel_port_all}_{name2}_all_admin")
 
         col_ok_all, col_refresh_all = st.columns([1,1])
         with col_ok_all:
@@ -529,7 +541,7 @@ if st.session_state.get("mode") == "admin":
 
         # ---------- 全ポート最下部: 全件リセット（パスワード保護） ----------
         st.markdown("---")
-        st.write("全港を base 値にリセットします。実行すると現在の全データが上書きされます。")
+        st.write("全ポートを base 値にリセットします。実行すると現在の全データが上書きされます。")
         pwd = st.text_input("操作パスワードを入力してください", type="password", key="reset_all_pwd")
         if st.button("全港を base 値にリセット（パスワード必須）", key="reset_all_confirm"):
             if pwd == RESET_PASSWORD:
