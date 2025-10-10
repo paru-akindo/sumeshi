@@ -377,7 +377,7 @@ else:
 # --------------------
 if st.session_state.get("mode") == "admin":
     st.header("管理画面")
-    tab_missing, tab_all = st.tabs(["未更新港の編集", "全ポート一覧"])
+    tab_missing, tab_all = st.tabs(["未更新港の編集", "全港一覧"])
 
     with tab_missing:
         st.subheader("未更新港の編集")
