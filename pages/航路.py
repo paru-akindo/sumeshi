@@ -194,8 +194,8 @@ for port in PORTS_CFG:
         all_populated = False
         missing_ports.append(port)
 
-show_price_table = st.checkbox("価格表を表示", value=False, key="chk_price_table")
-show_correction_table = st.checkbox("割引率を表示", value=False, key="chk_corr_table")
+show_price_table = st.checkbox("価格表を表示（実価格）", value=False, key="chk_price_table")
+show_correction_table = st.checkbox("補正表を表示（基礎値差）", value=False, key="chk_corr_table")
 
 if "mode" not in st.session_state:
     st.session_state["mode"] = "view"
@@ -228,18 +228,30 @@ if all_populated:
         item_scores.sort(key=lambda t: (t[1], t[2]))
         top5 = item_scores[:5]
 
+        # --- 在庫入力: 行ごとに2カラム作成して順序を安定させる（スマホ対応） ---
         st.write("在庫入力（上位5）")
         stock_inputs = {}
-        cols = st.columns(2)
-        for i, (name, ratio, price_val, base_val) in enumerate(top5):
+        for row_start in range(0, len(top5), 2):
+            c_left, c_right = st.columns(2)
+            # 左
+            name, ratio, price_val, base_val = top5[row_start]
             pct = int(round((price_val - base_val) / float(base_val) * 100)) if base_val != 0 else 0
             sign_pct = f"{pct:+d}%"
             label = f"{name}({sign_pct}) 在庫数"
             help_text = f"現在価格: {price_val} / 基礎値: {base_val}"
-            c = cols[i % 2]
-            with c:
+            with c_left:
                 stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
                 st.caption(help_text)
+            # 右（存在すれば）
+            if row_start + 1 < len(top5):
+                name2, ratio2, price_val2, base_val2 = top5[row_start + 1]
+                pct2 = int(round((price_val2 - base_val2) / float(base_val2) * 100)) if base_val2 != 0 else 0
+                sign_pct2 = f"{pct2:+d}%"
+                label2 = f"{name2}({sign_pct2}) 在庫数"
+                help_text2 = f"現在価格: {price_val2} / 基礎値: {base_val2}"
+                with c_right:
+                    stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
+                    st.caption(help_text2)
 
         top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=10, value=3, key="slider_topk")
 
@@ -517,7 +529,7 @@ if st.session_state.get("mode") == "admin":
 
         # ---------- 全ポート最下部: 全件リセット（パスワード保護） ----------
         st.markdown("---")
-        st.write("全港のデータを base 値にリセットします。実行すると現在の全データが上書きされます。")
+        st.write("全港を base 値にリセットします。実行すると現在の全データが上書きされます。")
         pwd = st.text_input("操作パスワードを入力してください", type="password", key="reset_all_pwd")
         if st.button("全港を base 値にリセット（パスワード必須）", key="reset_all_confirm"):
             if pwd == RESET_PASSWORD:
