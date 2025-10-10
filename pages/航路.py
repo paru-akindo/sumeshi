@@ -197,175 +197,177 @@ if "mode" not in st.session_state:
     st.session_state["mode"] = "view"
 
 # --------------------
-# シミュレーション領域（左）＋テーブル領域（右）
+# シミュレーションは未更新がないときだけ描画する
 # --------------------
-price_matrix = build_price_matrix_from_prices(PRICES_CFG, items=ITEMS_CFG, ports=PORTS_CFG)
+if all_populated:
+    price_matrix = build_price_matrix_from_prices(PRICES_CFG, items=ITEMS_CFG, ports=PORTS_CFG)
 
-col_left, col_main = st.columns([1, 2])
+    col_left, col_main = st.columns([1, 2])
 
-with col_left:
-    st.header("シミュレーション")
-    if all_populated:
+    with col_left:
+        st.header("シミュレーション")
         st.success("すべての港に実価格が入力されています。")
-    else:
-        st.warning("一部の港が未更新です。管理画面で入力してください。")
-        st.write("未更新港:", missing_ports)
 
-    current_port = st.selectbox("現在港", PORTS_CFG, index=0, key="sel_current_port")
-    cash = numeric_input_optional_strict("所持金", key="cash_input", placeholder="例: 5000", allow_commas=True, min_value=0)
+        current_port = st.selectbox("現在港", PORTS_CFG, index=0, key="sel_current_port")
+        cash = numeric_input_optional_strict("所持金", key="cash_input", placeholder="例: 5000", allow_commas=True, min_value=0)
 
-    # 管理画面へ飛ぶボタン（シミュレーション側にも配置）
-    if st.button("管理画面を開く", key="btn_open_admin"):
+        if st.button("管理画面を開く", key="btn_open_admin"):
+            st.session_state["mode"] = "admin"
+            safe_rerun()
+
+        # 在庫入力対象の選定（price/base 小さい順、同率は価格小さい順）
+        item_scores = []
+        for item_name, base in ITEMS_CFG:
+            this_price = price_matrix[item_name][current_port]
+            ratio = this_price / float(base) if base != 0 else float('inf')
+            item_scores.append((item_name, ratio, this_price, base))
+        item_scores.sort(key=lambda t: (t[1], t[2]))
+        top5 = item_scores[:5]
+
+        st.write("在庫入力（上位5）")
+        stock_inputs = {}
+        cols = st.columns(2)
+        for i, (name, ratio, price_val, base_val) in enumerate(top5):
+            pct = int(round((price_val - base_val) / float(base_val) * 100)) if base_val != 0 else 0
+            sign_pct = f"{pct:+d}%"
+            label = f"{name}({sign_pct}) 在庫数"
+            help_text = f"現在価格: {price_val} / 基礎値: {base_val}"
+            c = cols[i % 2]
+            with c:
+                stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
+                st.caption(help_text)
+
+        top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=10, value=3, key="slider_topk")
+
+        if st.button("検索", key="btn_search_sim"):
+            if cash is None:
+                st.error("所持金を入力してください（空欄不可）。")
+            else:
+                invalid_found = False
+                for name in stock_inputs.keys():
+                    if st.session_state.get(f"stk_{name}_sim_invalid", False):
+                        st.error(f"{name} の入力が不正です。")
+                        invalid_found = True
+                if invalid_found:
+                    st.error("不正入力があるため中止します。")
+                else:
+                    current_stock = {n: 0 for n, _ in ITEMS_CFG}
+                    for name in stock_inputs:
+                        val = stock_inputs.get(name)
+                        current_stock[name] = int(val) if val is not None else 0
+
+                    results = []
+                    for dest in PORTS_CFG:
+                        if dest == current_port:
+                            continue
+                        plan, cost, profit = greedy_plan_for_destination(current_port, dest, cash, current_stock, price_matrix)
+                        results.append((dest, plan, cost, profit))
+                    results.sort(key=lambda x: x[3], reverse=True)
+                    top_results = results[:top_k]
+
+                    if not top_results or all(r[3] <= 0 for r in top_results):
+                        st.info("利益の見込める到着先は見つかりませんでした。")
+                    else:
+                        for rank, (dest, plan, cost, profit) in enumerate(top_results, start=1):
+                            st.markdown(f"### {rank}. 到着先: {dest}　想定合計利益: {profit}　合計購入金額: {cost}")
+                            if not plan:
+                                st.write("購入候補がありません。")
+                                continue
+                            df = pd.DataFrame([{
+                                "品目": item,
+                                "購入数": qty,
+                                "購入単価": buy,
+                                "売価": sell,
+                                "単位差益": unit_profit,
+                                "想定利益": qty * unit_profit
+                            } for item, qty, buy, sell, unit_profit in plan])
+                            totals = {"品目":"合計", "購入数": int(df["購入数"].sum()) if not df.empty else 0, "購入単価": np.nan, "売価": np.nan, "単位差益": np.nan, "想定利益": int(df["想定利益"].sum()) if not df.empty else 0}
+                            df_disp = pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
+                            num_format = {"購入単価":"{:,.0f}", "売価":"{:,.0f}", "単位差益":"{:,.0f}", "購入数":"{:,.0f}", "想定利益":"{:,.0f}"}
+                            styled = df_disp.style.format(num_format, na_rep="")
+                            st.dataframe(styled, height=240)
+
+    # 右側のテーブル表示
+    with col_main:
+        st.header("テーブル表示")
+
+        if show_price_table:
+            rows = []
+            for item, base in ITEMS_CFG:
+                row = {"品目": item}
+                for p in PORTS_CFG:
+                    row[p] = price_matrix[item][p]
+                rows.append(row)
+            df_price = pd.DataFrame(rows).set_index("品目")
+
+            def price_cell_css_simple(price_val, base):
+                try:
+                    price_int = int(price_val)
+                except Exception:
+                    return ""
+                diff = price_int - base
+                if diff < 0:
+                    return "background-color: #ffc0cb; color: #000"
+                elif diff > 0:
+                    return "background-color: #c6f6b6; color: #000"
+                else:
+                    return ""
+
+            def price_styler_simple(df):
+                sty = pd.DataFrame("", index=df.index, columns=df.columns)
+                base_map = dict(ITEMS_CFG)
+                for item in df.index:
+                    base = base_map[item]
+                    for col in df.columns:
+                        sty.at[item, col] = price_cell_css_simple(df.at[item, col], base)
+                return sty
+
+            st.subheader("実価格表")
+            styled_price = df_price.style.apply(lambda _: price_styler_simple(df_price), axis=None)
+            st.dataframe(styled_price, height=380)
+
+        if show_correction_table:
+            rows = []
+            for item, base in ITEMS_CFG:
+                row = {"品目": item}
+                for p in PORTS_CFG:
+                    price = price_matrix[item][p]
+                    pct = int(round((price - base) / float(base) * 100)) if base != 0 else 0
+                    row[p] = pct
+                rows.append(row)
+            df_corr = pd.DataFrame(rows).set_index("品目")
+
+            def corr_cell_css_simple(pct_val):
+                try:
+                    v = int(pct_val)
+                except Exception:
+                    return ""
+                if v < 0:
+                    return "background-color: #ffc0cb; color: #000"
+                elif v > 0:
+                    return "background-color: #c6f6b6; color: #000"
+                else:
+                    return ""
+
+            def corr_styler_simple(df):
+                sty = pd.DataFrame("", index=df.index, columns=df.columns)
+                for item in df.index:
+                    for col in df.columns:
+                        sty.at[item, col] = corr_cell_css_simple(df.at[item, col])
+                return sty
+
+            st.subheader("割引率表")
+            styled_corr = df_corr.style.apply(lambda _: corr_styler_simple(df_corr), axis=None)
+            styled_corr = styled_corr.format("{:+d}", na_rep="")
+            st.dataframe(styled_corr, height=380)
+
+else:
+    # 未更新がある場合はシミュレーションを表示せず、管理誘導のみ表示
+    st.warning("一部の港が未更新です。管理画面で入力してください。")
+    st.write("未更新港:", missing_ports)
+    if st.button("管理画面を開く（未更新港を編集）", key="btn_open_admin_from_missing"):
         st.session_state["mode"] = "admin"
         safe_rerun()
-
-    # 在庫入力対象の選定: 価格 / 基礎値 小さい順、同率は価格小さい順
-    item_scores = []
-    for item_name, base in ITEMS_CFG:
-        this_price = price_matrix[item_name][current_port]
-        ratio = this_price / float(base) if base != 0 else float('inf')
-        item_scores.append((item_name, ratio, this_price, base))
-
-    item_scores.sort(key=lambda t: (t[1], t[2]))
-    top5 = item_scores[:5]
-
-    st.write("在庫入力（上位5）")
-    stock_inputs = {}
-    cols = st.columns(2)
-    for i, (name, ratio, price_val, base_val) in enumerate(top5):
-        pct = int(round((price_val - base_val) / float(base_val) * 100)) if base_val != 0 else 0
-        sign_pct = f"{pct:+d}%"  # 例: -13% or +05%
-        label = f"{name}({sign_pct}) 在庫数"
-        help_text = f"現在価格: {price_val} / 基礎値: {base_val}"
-        c = cols[i % 2]
-        with c:
-            stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
-            st.caption(help_text)
-
-    top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=10, value=3, key="slider_topk")
-
-    if st.button("検索", key="btn_search_sim"):
-        if cash is None:
-            st.error("所持金を入力してください（空欄不可）。")
-        else:
-            invalid_found = False
-            for name in stock_inputs.keys():
-                if st.session_state.get(f"stk_{name}_sim_invalid", False):
-                    st.error(f"{name} の入力が不正です。")
-                    invalid_found = True
-            if invalid_found:
-                st.error("不正入力があるため中止します。")
-            else:
-                current_stock = {n: 0 for n, _ in ITEMS_CFG}
-                for name in stock_inputs:
-                    val = stock_inputs.get(name)
-                    current_stock[name] = int(val) if val is not None else 0
-
-                results = []
-                for dest in PORTS_CFG:
-                    if dest == current_port:
-                        continue
-                    plan, cost, profit = greedy_plan_for_destination(current_port, dest, cash, current_stock, price_matrix)
-                    results.append((dest, plan, cost, profit))
-                results.sort(key=lambda x: x[3], reverse=True)
-                top_results = results[:top_k]
-
-                if not top_results or all(r[3] <= 0 for r in top_results):
-                    st.info("利益の見込める到着先は見つかりませんでした。")
-                else:
-                    for rank, (dest, plan, cost, profit) in enumerate(top_results, start=1):
-                        st.markdown(f"### {rank}. 到着先: {dest}　想定合計利益: {profit}　合計購入金額: {cost}")
-                        if not plan:
-                            st.write("購入候補がありません。")
-                            continue
-                        df = pd.DataFrame([{
-                            "品目": item,
-                            "購入数": qty,
-                            "購入単価": buy,
-                            "売価": sell,
-                            "単位差益": unit_profit,
-                            "想定利益": qty * unit_profit
-                        } for item, qty, buy, sell, unit_profit in plan])
-                        totals = {"品目":"合計", "購入数": int(df["購入数"].sum()) if not df.empty else 0, "購入単価": np.nan, "売価": np.nan, "単位差益": np.nan, "想定利益": int(df["想定利益"].sum()) if not df.empty else 0}
-                        df_disp = pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
-                        num_format = {"購入単価":"{:,.0f}", "売価":"{:,.0f}", "単位差益":"{:,.0f}", "購入数":"{:,.0f}", "想定利益":"{:,.0f}"}
-                        styled = df_disp.style.format(num_format, na_rep="")
-                        st.dataframe(styled, height=240)
-
-# --------------------
-# 右側: テーブル表示（価格表 / 補正表）
-# --------------------
-with col_main:
-    st.header("テーブル表示")
-    if show_price_table:
-        rows = []
-        for item, base in ITEMS_CFG:
-            row = {"品目": item}
-            for p in PORTS_CFG:
-                row[p] = price_matrix[item][p]
-            rows.append(row)
-        df_price = pd.DataFrame(rows).set_index("品目")
-
-        def price_cell_css_simple(price_val, base):
-            try:
-                price_int = int(price_val)
-            except Exception:
-                return ""
-            diff = price_int - base
-            if diff < 0:
-                return "background-color: #ffc0cb; color: #000"
-            elif diff > 0:
-                return "background-color: #c6f6b6; color: #000"
-            else:
-                return ""
-
-        def price_styler_simple(df):
-            sty = pd.DataFrame("", index=df.index, columns=df.columns)
-            base_map = dict(ITEMS_CFG)
-            for item in df.index:
-                base = base_map[item]
-                for col in df.columns:
-                    sty.at[item, col] = price_cell_css_simple(df.at[item, col], base)
-            return sty
-
-        st.subheader("実価格")
-        styled_price = df_price.style.apply(lambda _: price_styler_simple(df_price), axis=None)
-        st.dataframe(styled_price, height=380)
-
-    if show_correction_table:
-        rows = []
-        for item, base in ITEMS_CFG:
-            row = {"品目": item}
-            for p in PORTS_CFG:
-                price = price_matrix[item][p]
-                pct = int(round((price - base) / float(base) * 100)) if base != 0 else 0
-                row[p] = pct
-            rows.append(row)
-        df_corr = pd.DataFrame(rows).set_index("品目")
-
-        def corr_cell_css_simple(pct_val):
-            try:
-                v = int(pct_val)
-            except Exception:
-                return ""
-            if v < 0:
-                return "background-color: #ffc0cb; color: #000"
-            elif v > 0:
-                return "background-color: #c6f6b6; color: #000"
-            else:
-                return ""
-
-        def corr_styler_simple(df):
-            sty = pd.DataFrame("", index=df.index, columns=df.columns)
-            for item in df.index:
-                for col in df.columns:
-                    sty.at[item, col] = corr_cell_css_simple(df.at[item, col])
-            return sty
-
-        st.subheader("割引率")
-        styled_corr = df_corr.style.apply(lambda _: corr_styler_simple(df_corr), axis=None)
-        styled_corr = styled_corr.format("{:+d}", na_rep="")
-        st.dataframe(styled_corr, height=380)
 
 # --------------------
 # 管理画面（左右レイアウト: 左=未更新編集, 右=全ポート一覧）
