@@ -31,6 +31,11 @@ JSONBIN_BASE = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 JSONBIN_HEADERS = {"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY}
 
 # --------------------
+# 全件リセットのパスワード（ソース直書き）
+# --------------------
+RESET_PASSWORD = "alan"  # <-- 必要に応じて書き換えてください
+
+# --------------------
 # ヘルパー関数
 # --------------------
 def safe_rerun():
@@ -192,7 +197,6 @@ for port in PORTS_CFG:
 show_price_table = st.checkbox("価格表を表示", value=False, key="chk_price_table")
 show_correction_table = st.checkbox("割引率を表示", value=False, key="chk_corr_table")
 
-# 管理モードのセッション初期化
 if "mode" not in st.session_state:
     st.session_state["mode"] = "view"
 
@@ -287,7 +291,7 @@ if all_populated:
                             styled = df_disp.style.format(num_format, na_rep="")
                             st.dataframe(styled, height=240)
 
-    # 右側のテーブル表示
+    # 右側テーブル表示
     with col_main:
         st.header("テーブル表示")
 
@@ -362,7 +366,6 @@ if all_populated:
             st.dataframe(styled_corr, height=380)
 
 else:
-    # 未更新がある場合はシミュレーションを表示せず、管理誘導のみ表示
     st.warning("一部の港が未更新です。管理画面で入力してください。")
     st.write("未更新港:", missing_ports)
     if st.button("管理画面を開く（未更新港を編集）", key="btn_open_admin_from_missing"):
@@ -370,14 +373,13 @@ else:
         safe_rerun()
 
 # --------------------
-# 管理画面（左右レイアウト: 左=未更新編集, 右=全ポート一覧）
+# 管理画面（タブ式: 未更新 / 全ポート）
 # --------------------
 if st.session_state.get("mode") == "admin":
     st.header("管理画面")
+    tab_missing, tab_all = st.tabs(["未更新港の編集", "全ポート一覧"])
 
-    left_col, right_col = st.columns([1, 1])
-
-    with left_col:
+    with tab_missing:
         st.subheader("未更新港の編集")
         if missing_ports:
             sel_missing = st.selectbox("編集する未更新港", options=missing_ports, key="sel_missing_admin")
@@ -454,24 +456,9 @@ if st.session_state.get("mode") == "admin":
         else:
             st.info("未更新の港はありません。")
 
-        st.markdown("---")
-        if st.button("全港を base 値にリセット（注意: 上書きされます）", key="reset_all_global"):
-            PRICES_CFG = reset_all_ports_to_base(ITEMS_CFG, PRICES_CFG, PORTS_CFG)
-            cfg["PRICES"] = PRICES_CFG
-            try:
-                resp = save_cfg_to_jsonbin(cfg)
-                st.success(f"全港を base にリセットしました。HTTP {resp.status_code}")
-                new_cfg = fetch_cfg_from_jsonbin()
-                if new_cfg:
-                    cfg = new_cfg
-                    PRICES_CFG = cfg.get("PRICES", {})
-                    safe_rerun()
-            except Exception as e:
-                st.error(f"全件リセットに失敗しました: {e}")
-
-    with right_col:
-        st.subheader("全ポート一覧（編集／参照）")
-        sel_port_all = st.selectbox("編集する港を選択（全ポート）", options=PORTS_CFG, key="sel_port_all_admin")
+    with tab_all:
+        st.subheader("全港一覧")
+        sel_port_all = st.selectbox("編集する港を選択", options=PORTS_CFG, key="sel_port_all_admin")
         st.markdown(f"## {sel_port_all} の価格（編集可）")
         current_row = PRICES_CFG.get(sel_port_all, {})
         cols2 = st.columns(2)
@@ -527,6 +514,27 @@ if st.session_state.get("mode") == "admin":
                     safe_rerun()
                 else:
                     st.error("再取得に失敗しました。")
+
+        # ---------- 全ポート最下部: 全件リセット（パスワード保護） ----------
+        st.markdown("---")
+        st.write("全港のデータを base 値にリセットします。実行すると現在の全データが上書きされます。")
+        pwd = st.text_input("操作パスワードを入力してください", type="password", key="reset_all_pwd")
+        if st.button("全港を base 値にリセット（パスワード必須）", key="reset_all_confirm"):
+            if pwd == RESET_PASSWORD:
+                PRICES_CFG = reset_all_ports_to_base(ITEMS_CFG, PRICES_CFG, PORTS_CFG)
+                cfg["PRICES"] = PRICES_CFG
+                try:
+                    resp = save_cfg_to_jsonbin(cfg)
+                    st.success(f"全港を base にリセットしました。HTTP {resp.status_code}")
+                    new_cfg = fetch_cfg_from_jsonbin()
+                    if new_cfg:
+                        cfg = new_cfg
+                        PRICES_CFG = cfg.get("PRICES", {})
+                        safe_rerun()
+                except Exception as e:
+                    st.error(f"全件リセットに失敗しました: {e}")
+            else:
+                st.error("パスワードが違います。操作は中止されました。")
 
     st.markdown("---")
     if st.button("管理モードを終了して戻る", key="btn_close_admin"):
