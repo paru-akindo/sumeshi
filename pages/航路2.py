@@ -251,21 +251,21 @@ with col2:
     item_scores.sort(key=lambda t: (t[3], t[1]))
     top5 = item_scores[:5]
 
-    st.write("在庫入力（必須：Top5品目）: 現在港の価格/基礎値 小さい順に表示")
+    st.write("在庫入力（必須：Top5品目）")
     stock_inputs = {}
     for row_start in range(0, len(top5), 2):
         c_left, c_right = st.columns(2)
         name, buy, base, ratio = top5[row_start]
         pct = int(round((buy - base) / base * 100)) if base != 0 and buy>0 else 0
-        label = f"{name}（価格: {buy}, 基礎値: {base}, 補正: {pct:+d}%） 在庫数（必須）"
+        label = f"{name}（価格: {buy}, 補正: {pct:+d}%）"
         with c_left:
-            stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}", placeholder="例: 10", allow_commas=True, min_value=0)
+            stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}", placeholder="在庫数", allow_commas=True, min_value=0)
         if row_start + 1 < len(top5):
             name2, buy2, base2, ratio2 = top5[row_start+1]
             pct2 = int(round((buy2 - base2) / base2 * 100)) if base2 != 0 and buy2>0 else 0
-            label2 = f"{name2}（価格: {buy2}, 基礎値: {base2}, 補正: {pct2:+d}%） 在庫数（必須）"
+            label2 = f"{name2}（価格: {buy2}, 補正: {pct2:+d}%）"
             with c_right:
-                stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}", placeholder="例: 10", allow_commas=True, min_value=0)
+                stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}", placeholder="在庫数", allow_commas=True, min_value=0)
 
     top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=min(10, len(ports)-1), value=3)
     lookahead_mode = st.checkbox("1手先モード（到着先の先を想定）", value=False)
