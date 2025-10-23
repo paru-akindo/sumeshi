@@ -8,7 +8,7 @@ import requests
 from io import StringIO
 from copy import deepcopy
 
-st.set_page_config(page_title="買い物プランナー（公開スプシCSV）", layout="wide")
+st.set_page_config(page_title="航路買い物", layout="wide")
 
 # --------------------
 # 設定: ITEMS はスプレッドシートの品目列ヘッダと一致させること
@@ -219,7 +219,7 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
 # --------------------
 # UI
 # --------------------
-st.title("買い物プランナー（公開スプシCSV参照）")
+st.title("何買おうかな")
 st.markdown(f'<div style="margin-bottom:8px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示）</a> | <a href="{CSV_URL}" target="_blank" rel="noopener noreferrer">CSV を開く</a></div>', unsafe_allow_html=True)
 
 # 価格取得
@@ -268,7 +268,7 @@ with col2:
                 stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}", placeholder="例: 10", allow_commas=True, min_value=0)
 
     top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=min(10, len(ports)-1), value=3)
-    lookahead_mode = st.checkbox("1手先モードで評価する（到着先の先を想定）", value=False)
+    lookahead_mode = st.checkbox("1手先モード（到着先の先を想定）", value=False)
     second_k = None
     if lookahead_mode:
         second_k = st.number_input("二手目候補を上位何港だけ評価するか（1〜 全探索）", min_value=1, max_value=max(1, len(ports)-1), value=min(5, max(1, len(ports)-1)))
@@ -381,14 +381,35 @@ with col2:
                             profit = meta["first_profit"]
                             # 見出し（ラベル小、値強調）
                             st.markdown(
-                                f'<div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">'
-                                f'<span style="font-size:0.85em; color:#444; margin-right:4px;">到着先</span>'
-                                f'<span style="font-size:1.15em; font-weight:700; color:#111;">{dest}</span>'
-                                f'<span style="margin:0 8px; color:#ccc;">|</span>'
-                                f'<span style="font-size:0.85em; color:#444; margin-right:4px;">想定利益</span>'
-                                f'<span style="font-size:1.15em; font-weight:700; color:#0b6;">{profit:,}</span>'
-                                f'<a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer" style="margin-left:12px; font-size:0.85em; color:#06c; text-decoration:none;">スプレッドシートを開く</a>'
-                                f'</div>',
+                                f'''
+                                <style>
+                                  .dest-row {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:6px 8px; border-radius:6px; }}
+                                  /* ライトモード用 */
+                                  @media (prefers-color-scheme: light) {{
+                                    .dest-row {{ background: rgba(255,255,255,0.0); }}
+                                    .dest-row .label {{ color:#444; }}
+                                    .dest-row .value {{ color:#111; }}
+                                    .dest-row .sep {{ color:#ccc; }}
+                                  }}
+                                  /* ダークモード用 */
+                                  @media (prefers-color-scheme: dark) {{
+                                    .dest-row {{ background: rgba(0,0,0,0.0); }}
+                                    .dest-row .label {{ color:#cfcfcf; }}
+                                    .dest-row .value {{ color:#ffffff; }}
+                                    .dest-row .sep {{ color:#666; }}
+                                  }}
+                                  /* 強制対策: ブラウザ側で色を上書きされる場合に備えた!important指定 */
+                                  .dest-row .label, .dest-row .value, .dest-row .sep {{ -webkit-text-fill-color: initial !important; }}
+                                </style>
+
+                                <div class="dest-row">
+                                  <span class="label" style="font-size:0.85em; margin-right:4px;">到着先</span>
+                                  <span class="value" style="font-size:1.15em; font-weight:700;">{dest}</span>
+                                  <span class="sep" style="margin:0 8px;">|</span>
+                                  <span class="label" style="font-size:0.85em; margin-right:4px;">想定利益</span>
+                                  <span class="value" style="font-size:1.15em; font-weight:700;">{profit:,}</span>
+                                </div>
+                                ''',
                                 unsafe_allow_html=True
                             )
                             if not plan:
