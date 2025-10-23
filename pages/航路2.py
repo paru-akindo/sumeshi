@@ -342,7 +342,6 @@ with col2:
                                   <span class="sep" style="margin:0 8px;">|</span>
                                   <span class="label" style="font-size:0.85em; margin-right:4px;">合計想定利益</span>
                                   <span class="value" style="font-size:1.15em; font-weight:700; color:#0b6;">{total_profit:,}</span>
-                                  <a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer" style="margin-left:12px; font-size:0.85em; color:#06c; text-decoration:none;">スプレッドシートを開く</a>
                                 </div>
                                 ''',
                                 unsafe_allow_html=True
