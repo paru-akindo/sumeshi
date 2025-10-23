@@ -229,10 +229,6 @@ except Exception as e:
     st.error(f"スプレッドシート（CSV）からの読み込みに失敗しました: {e}")
     st.stop()
 
-# 簡易表示オプション
-if st.checkbox("取得した港一覧を表示"):
-    st.write(ports)
-
 # レイアウト
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
