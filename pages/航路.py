@@ -1,19 +1,18 @@
 # main.py
 import streamlit as st
-import requests
-import json
-import re
 from typing import Dict, List, Tuple
 import pandas as pd
 import numpy as np
+import re
+import requests
+from io import StringIO
 
 st.set_page_config(page_title="効率よく買い物しよう！", layout="wide")
 
 # --------------------
-# 定数
+# 定数: 品目・基礎値・港はソース（スプレッドシート）と一致させること
 # --------------------
-PORTS = ["博多","開京","明州","泉州","広州","淡水","安南","ボニ","タイ","真臘","スル","三仏斉","ジョホール","大光国","天竺","セイロン","ペルシャ","大食国","ミスル","末羅国"]
-
+# ITEMS の順序・名称はスプレッドシートの列ヘッダーと揃えてください（左端は港名列）
 ITEMS = [
     ("鳳梨",100),("魚肉",100),("酒",100),("水稲",100),("木材",100),("ヤシ",100),
     ("海鮮",200),("絹糸",200),("水晶",200),("茶葉",200),("鉄鉱",200),
@@ -23,62 +22,21 @@ ITEMS = [
 ]
 
 # --------------------
-# jsonbin 設定（必要なら置き換えてください）
+# Google スプレッドシート（公開CSV）設定
+# 使い方:
+#   {SPREADSHEET_ID} は URL の /d/.../ の部分
+#   {GID} は該当シートの gid パラメータ（通常最初のシートは 0）
+# CSV_URL の形式:
+#   https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID}
 # --------------------
-JSONBIN_API_KEY = "$2a$10$wkVzPCcsW64wR96r26OsI.HDd3ijLveJn6sxJoSjfzByIRyODPCHq"
-JSONBIN_BIN_ID = "68e8d05ed0ea881f409c39c4"
-JSONBIN_BASE = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-JSONBIN_HEADERS = {"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY}
+SPREADSHEET_ID = "1ft5FlwM5kaZK7B4vLQg2m1WYe5nWNb0udw5isFwDWy0"
+GID = "1"
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID}"
 
 # --------------------
-# 全件リセットのパスワード（ソース直書き）
+# ヘルパー: 厳格整数入力（空欄許容）
 # --------------------
-RESET_PASSWORD = "alan"  # <-- 必要に応じて書き換えてください
-
-# --------------------
-# ヘルパー関数
-# --------------------
-def safe_rerun():
-    try:
-        getattr(st, "experimental_rerun")()
-    except Exception:
-        return
-
-def fetch_cfg_from_jsonbin():
-    try:
-        r = requests.get(f"{JSONBIN_BASE}/latest", headers=JSONBIN_HEADERS, timeout=8)
-        r.raise_for_status()
-        payload = r.json()
-        return payload.get("record", payload)
-    except Exception:
-        return None
-
-def save_cfg_to_jsonbin(cfg: dict):
-    r = requests.put(JSONBIN_BASE, headers=JSONBIN_HEADERS, data=json.dumps(cfg, ensure_ascii=False))
-    r.raise_for_status()
-    return r
-
-def normalize_items(raw_items) -> List[Tuple[str,int]]:
-    out = []
-    for it in raw_items:
-        if isinstance(it, (list, tuple)):
-            out.append((it[0], int(it[1])))
-        elif isinstance(it, dict):
-            out.append((it["name"], int(it["base"])))
-        else:
-            raise ValueError("Unknown item format")
-    return out
-
-def port_has_actual_prices(port_prices: dict, items: List[Tuple[str,int]]) -> bool:
-    for name, _ in items:
-        if name not in port_prices or not isinstance(port_prices[name], (int, float)):
-            return False
-    for name, base in items:
-        if int(round(port_prices.get(name))) != int(base):
-            return True
-    return False
-
-def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", allow_commas: bool = True, min_value: int = None):
+def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", allow_commas: bool = True, min_value: int = None, max_value: int = None):
     invalid_flag = f"{key}_invalid"
     if invalid_flag not in st.session_state:
         st.session_state[invalid_flag] = False
@@ -98,23 +56,28 @@ def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", a
         st.session_state[invalid_flag] = True
         return None
 
-    val = int(s)
+    try:
+        val = int(s)
+    except Exception:
+        st.error(f"「{label}」の数値変換に失敗しました。入力: {raw}")
+        st.session_state[invalid_flag] = True
+        return None
+
     if min_value is not None and val < min_value:
         st.error(f"「{label}」は {min_value} 以上で入力してください。")
+        st.session_state[invalid_flag] = True
+        return None
+    if max_value is not None and val > max_value:
+        st.error(f"「{label}」は {max_value} 以下で入力してください。")
         st.session_state[invalid_flag] = True
         return None
 
     st.session_state[invalid_flag] = False
     return val
 
-def build_price_matrix_from_prices(prices_cfg: Dict[str, Dict[str,int]], items=ITEMS, ports=PORTS):
-    price = {name: {} for name, _ in items}
-    for port in ports:
-        port_row = prices_cfg.get(port, {})
-        for name, _ in items:
-            price[name][port] = int(port_row.get(name, 0))
-    return price
-
+# --------------------
+# 既存の最適化ロジック（そのまま）
+# --------------------
 def greedy_plan_for_destination(current_port: str, dest_port: str, cash: int, stock: Dict[str,int], price_matrix: Dict[str,Dict[str,int]]):
     candidates = []
     for item, base in ITEMS:
@@ -144,423 +107,222 @@ def greedy_plan_for_destination(current_port: str, dest_port: str, cash: int, st
     return plan, total_cost, total_profit
 
 # --------------------
-# 追加ユーティリティ
+# CSV から価格表を取得して price_matrix を作る
+# price_matrix: { item_name: { port_name: price_int, ... }, ... }
+# スプレッドシートの形式:
+#  1行目ヘッダー: 港名, 鳳梨, 魚肉, 酒, ...
+#  2行目以降: 各港の行（左端が港名）
 # --------------------
-def reset_port_to_base(port: str, items_cfg: List[Tuple[str,int]], prices_cfg: Dict[str, Dict[str,int]]):
-    new_row = {}
-    for name, base in items_cfg:
-        new_row[name] = int(base)
-    prices_cfg[port] = new_row
-    return prices_cfg
+@st.cache_data(ttl=60)
+def fetch_price_matrix_from_csv_auto(url: str):
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    s = r.content.decode("utf-8")
+    df = pd.read_csv(StringIO(s))
 
-def reset_all_ports_to_base(items_cfg: List[Tuple[str,int]], prices_cfg: Dict[str, Dict[str,int]], ports: List[str]):
-    for port in ports:
-        prices_cfg[port] = {name: int(base) for name, base in items_cfg}
-    return prices_cfg
+    if df.shape[1] < 2:
+        raise ValueError("スプレッドシートに品目列/港列が見つかりません。")
 
-def get_populated_ports(prices_cfg: Dict[str, Dict[str,int]], items_cfg: List[Tuple[str,int]], ports: List[str]):
-    populated = []
-    for port in ports:
-        row = prices_cfg.get(port, {})
-        ok = True
-        for name, _ in items_cfg:
-            if name not in row or not isinstance(row[name], (int, float)):
-                ok = False
-                break
-        if ok:
-            populated.append(port)
-    return populated
+    # 判定: 1列目の値が既知の港名リストにマッチするか、あるいは1行目が既知の品目名にマッチするか
+    first_col_name = df.columns[0]
+    first_col_values = df[first_col_name].astype(str).tolist()
+
+    # ITEMS の名前リスト（コード内定義順）
+    items_names = [name for name, _ in ITEMS]
+    # ports 候補はヘッダの2列目以降（もし行が品目の形式ならヘッダーが港名になる）
+    header_ports = list(df.columns[1:])
+
+    # 判定1: 行が港になっているか（1列目の値が港名候補に含まれる）
+    row_is_port = all(val in header_ports or val in header_ports or val in first_col_values for val in first_col_values)  # fallback, not strict
+
+    # より確実な判定: 1列目のいずれかが ITEMS 名に含まれる -> 行が品目形式（要転置）
+    any_first_col_is_item = any(v in items_names for v in first_col_values)
+    if any_first_col_is_item:
+        # ファイルは行=品目、列=港の形式。転置して扱う。
+        # 現在 df.index are items, columns are ['港名1','港2',...]
+        # Ensure first column is item names
+        df_items = df.set_index(df.columns[0])
+        df_t = df_items.transpose().reset_index()
+        # 新しい df_t: first col is port name in column 'index' or original header name
+        port_col = df_t.columns[0]
+        ports = df_t[port_col].astype(str).tolist()
+        # build price matrix using ITEMS order
+        price_matrix = {name: {} for name, _ in ITEMS}
+        for name, _ in ITEMS:
+            if name in df_t.columns:
+                for idx, p in enumerate(ports):
+                    raw = df_t.at[idx, name]
+                    try:
+                        price_matrix[name][p] = int(raw)
+                    except Exception:
+                        price_matrix[name][p] = 0
+            else:
+                for p in ports:
+                    price_matrix[name][p] = 0
+        return ports, price_matrix
+    else:
+        # 想定通り 行=港、列=品目 の形式
+        port_col = df.columns[0]
+        ports = df[port_col].astype(str).tolist()
+        price_matrix = {name: {} for name, _ in ITEMS}
+        for name, _ in ITEMS:
+            if name in df.columns:
+                for idx, p in enumerate(ports):
+                    raw = df.at[idx, name]
+                    try:
+                        price_matrix[name][p] = int(raw)
+                    except Exception:
+                        price_matrix[name][p] = 0
+            else:
+                for p in ports:
+                    price_matrix[name][p] = 0
+        return ports, price_matrix
 
 # --------------------
-# アプリ本体
+# UI
 # --------------------
 st.title("効率よく買い物しよう！")
 
-cfg = fetch_cfg_from_jsonbin()
-if cfg is None:
-    st.warning("jsonbin から読み込みできませんでした。組み込み定義を使用します。")
-    cfg = {"PORTS": PORTS, "ITEMS": [list(i) for i in ITEMS]}
+# 先頭に追加
+SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid={GID}"
 
-PORTS_CFG = cfg.get("PORTS", PORTS)
-ITEMS_CFG = normalize_items(cfg.get("ITEMS", [list(i) for i in ITEMS]))
-PRICES_CFG = cfg.get("PRICES", {})
+# 画面上部（タイトルのすぐ下など）に表示
+st.markdown(f'<div style="margin-top:6px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示）</a></div>', unsafe_allow_html=True)
 
-# 全港入力チェック（完全一致基準）
-all_populated = True
-missing_ports = []
-for port in PORTS_CFG:
-    port_prices = PRICES_CFG.get(port, {})
-    if not port_has_actual_prices(port_prices, ITEMS_CFG):
-        all_populated = False
-        missing_ports.append(port)
+# 価格取得
+try:
+    ports, price_matrix = fetch_price_matrix_from_csv_auto(CSV_URL)
+except Exception as e:
+    st.error(f"スプレッドシート（CSV）からの読み込みに失敗しました: {e}")
+    st.stop()
 
-show_price_table = st.checkbox("実価格", value=False, key="chk_price_table")
-show_correction_table = st.checkbox("割引率", value=False, key="chk_corr_table")
+# 中央レイアウト
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    current_port = st.selectbox("現在港", ports, index=0)
+    cash = numeric_input_optional_strict("所持金", key="cash_input", placeholder="例: 5000", allow_commas=True, min_value=0)
 
-if "mode" not in st.session_state:
-    st.session_state["mode"] = "view"
+    # お買い得上位5の選定: 現在港の価格 / 基礎値 が小さい順に top5
+    item_scores = []
+    for name, base in ITEMS:
+        buy = price_matrix.get(name, {}).get(current_port, 0)
+        # if buy is zero or missing, treat as very large ratio to de-prioritize
+        try:
+            ratio = buy / float(base) if base != 0 and buy > 0 else float("inf")
+        except Exception:
+            ratio = float("inf")
+        item_scores.append((name, buy, base, ratio))
+    item_scores.sort(key=lambda t: (t[3], t[1]))
+    top5 = item_scores[:5]
 
-# --------------------
-# シミュレーションは未更新がないときだけ描画する
-# --------------------
-if all_populated:
-    price_matrix = build_price_matrix_from_prices(PRICES_CFG, items=ITEMS_CFG, ports=PORTS_CFG)
+    st.write("在庫入力対象（お買い得上位5）")
+    stock_inputs = {}
+    # 行ごと2カラムで表示（スマホでも順序崩れない）
+    for row_start in range(0, len(top5), 2):
+        c_left, c_right = st.columns(2)
+        name, buy, base, ratio = top5[row_start]
+        pct = int(round((buy - base) / base * 100)) if base != 0 and buy>0 else 0
+        label = f"{name}（価格: {buy}, 補正: {pct:+d}%）"
+        with c_left:
+            stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}", placeholder="在庫数", allow_commas=True, min_value=0)
+        if row_start + 1 < len(top5):
+            name2, buy2, base2, ratio2 = top5[row_start+1]
+            pct2 = int(round((buy2 - base2) / base2 * 100)) if base2 != 0 and buy2>0 else 0
+            label2 = f"{name2}（価格: {buy2}, 補正: {pct2:+d}%）"
+            with c_right:
+                stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}", placeholder="在庫数", allow_commas=True, min_value=0)
 
-    col_left, col_main = st.columns([1, 2])
+    top_k = st.slider("上位何港を出すか（上位k）", min_value=1, max_value=10, value=3)
 
-    with col_left:
-        st.header("シミュレーション")
-        st.success("すべての港に実価格が入力されています。")
-
-        current_port = st.selectbox("現在港", PORTS_CFG, index=0, key="sel_current_port")
-        cash = numeric_input_optional_strict("所持金", key="cash_input", placeholder="例: 5000", allow_commas=True, min_value=0)
-
-        if st.button("管理画面を開く", key="btn_open_admin"):
-            st.session_state["mode"] = "admin"
-            safe_rerun()
-
-        # 在庫入力対象の選定（price/base 小さい順、同率は価格小さい順）
-        item_scores = []
-        for item_name, base in ITEMS_CFG:
-            this_price = price_matrix[item_name][current_port]
-            ratio = this_price / float(base) if base != 0 else float('inf')
-            item_scores.append((item_name, ratio, this_price, base))
-        item_scores.sort(key=lambda t: (t[1], t[2]))
-        top5 = item_scores[:5]
-
-        # --- 在庫入力: 行ごとに2カラム作成して順序を安定させる（スマホ対応） ---
-        st.write("在庫入力（上位5）")
-        stock_inputs = {}
-        for row_start in range(0, len(top5), 2):
-            c_left, c_right = st.columns(2)
-            # 左
-            name, ratio, price_val, base_val = top5[row_start]
-            pct = int(round((price_val - base_val) / float(base_val) * 100)) if base_val != 0 else 0
-            sign_pct = f"{pct:+d}%"
-            label = f"{name}({sign_pct}) 在庫数"
-            help_text = f"現在価格: {price_val} / 基礎値: {base_val}"
-            with c_left:
-                stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
-                st.caption(help_text)
-            # 右（存在すれば）
-            if row_start + 1 < len(top5):
-                name2, ratio2, price_val2, base_val2 = top5[row_start + 1]
-                pct2 = int(round((price_val2 - base_val2) / float(base_val2) * 100)) if base_val2 != 0 else 0
-                sign_pct2 = f"{pct2:+d}%"
-                label2 = f"{name2}({sign_pct2}) 在庫数"
-                help_text2 = f"現在価格: {price_val2} / 基礎値: {base_val2}"
-                with c_right:
-                    stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}_sim", placeholder="例: 10", allow_commas=True, min_value=0)
-                    st.caption(help_text2)
-
-        top_k = st.slider("表示上位何港を出すか（上位k）", min_value=1, max_value=10, value=3, key="slider_topk")
-
-        if st.button("検索", key="btn_search_sim"):
-            if cash is None:
-                st.error("所持金を入力してください（空欄不可）。")
-            else:
-                invalid_found = False
-                for name in stock_inputs.keys():
-                    if st.session_state.get(f"stk_{name}_sim_invalid", False):
-                        st.error(f"{name} の入力が不正です。")
-                        invalid_found = True
-                if invalid_found:
-                    st.error("不正入力があるため中止します。")
-                else:
-                    current_stock = {n: 0 for n, _ in ITEMS_CFG}
-                    for name in stock_inputs:
-                        val = stock_inputs.get(name)
-                        current_stock[name] = int(val) if val is not None else 0
-
-                    results = []
-                    for dest in PORTS_CFG:
-                        if dest == current_port:
-                            continue
-                        plan, cost, profit = greedy_plan_for_destination(current_port, dest, cash, current_stock, price_matrix)
-                        results.append((dest, plan, cost, profit))
-                    results.sort(key=lambda x: x[3], reverse=True)
-                    top_results = results[:top_k]
-
-                    if not top_results or all(r[3] <= 0 for r in top_results):
-                        st.info("利益の見込める到着先は見つかりませんでした。")
-                    else:
-                        for rank, (dest, plan, cost, profit) in enumerate(top_results, start=1):
-                            st.markdown(f"### {rank}. 到着先: {dest}　想定合計利益: {profit}　合計購入金額: {cost}")
-                            if not plan:
-                                st.write("購入候補がありません。")
-                                continue
-                            df = pd.DataFrame([{
-                                "品目": item,
-                                "購入数": qty,
-                                "購入単価": buy,
-                                "売価": sell,
-                                "単位差益": unit_profit,
-                                "想定利益": qty * unit_profit
-                            } for item, qty, buy, sell, unit_profit in plan])
-                            totals = {"品目":"合計", "購入数": int(df["購入数"].sum()) if not df.empty else 0, "購入単価": np.nan, "売価": np.nan, "単位差益": np.nan, "想定利益": int(df["想定利益"].sum()) if not df.empty else 0}
-                            df_disp = pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
-                            num_format = {"購入単価":"{:,.0f}", "売価":"{:,.0f}", "単位差益":"{:,.0f}", "購入数":"{:,.0f}", "想定利益":"{:,.0f}"}
-                            styled = df_disp.style.format(num_format, na_rep="")
-                            st.dataframe(styled, height=240)
-
-    # 右側テーブル表示
-    with col_main:
-        st.header("テーブル表示")
-
-        if show_price_table:
-            rows = []
-            for item, base in ITEMS_CFG:
-                row = {"品目": item}
-                for p in PORTS_CFG:
-                    row[p] = price_matrix[item][p]
-                rows.append(row)
-            df_price = pd.DataFrame(rows).set_index("品目")
-
-            def price_cell_css_simple(price_val, base):
-                try:
-                    price_int = int(price_val)
-                except Exception:
-                    return ""
-                diff = price_int - base
-                if diff < 0:
-                    return "background-color: #ffc0cb; color: #000"
-                elif diff > 0:
-                    return "background-color: #c6f6b6; color: #000"
-                else:
-                    return ""
-
-            def price_styler_simple(df):
-                sty = pd.DataFrame("", index=df.index, columns=df.columns)
-                base_map = dict(ITEMS_CFG)
-                for item in df.index:
-                    base = base_map[item]
-                    for col in df.columns:
-                        sty.at[item, col] = price_cell_css_simple(df.at[item, col], base)
-                return sty
-
-            st.subheader("実価格表")
-            styled_price = df_price.style.apply(lambda _: price_styler_simple(df_price), axis=None)
-            st.dataframe(styled_price, height=380)
-
-        if show_correction_table:
-            rows = []
-            for item, base in ITEMS_CFG:
-                row = {"品目": item}
-                for p in PORTS_CFG:
-                    price = price_matrix[item][p]
-                    pct = int(round((price - base) / float(base) * 100)) if base != 0 else 0
-                    row[p] = pct
-                rows.append(row)
-            df_corr = pd.DataFrame(rows).set_index("品目")
-
-            def corr_cell_css_simple(pct_val):
-                try:
-                    v = int(pct_val)
-                except Exception:
-                    return ""
-                if v < 0:
-                    return "background-color: #ffc0cb; color: #000"
-                elif v > 0:
-                    return "background-color: #c6f6b6; color: #000"
-                else:
-                    return ""
-
-            def corr_styler_simple(df):
-                sty = pd.DataFrame("", index=df.index, columns=df.columns)
-                for item in df.index:
-                    for col in df.columns:
-                        sty.at[item, col] = corr_cell_css_simple(df.at[item, col])
-                return sty
-
-            st.subheader("割引率表")
-            styled_corr = df_corr.style.apply(lambda _: corr_styler_simple(df_corr), axis=None)
-            styled_corr = styled_corr.format("{:+d}", na_rep="")
-            st.dataframe(styled_corr, height=380)
-
-else:
-    st.warning("一部の港が未更新です。管理画面で入力してください。")
-    st.write("未更新港:", missing_ports)
-    if st.button("管理画面を開く（未更新港を編集）", key="btn_open_admin_from_missing"):
-        st.session_state["mode"] = "admin"
-        safe_rerun()
-
-# --------------------
-# 管理画面（タブ式: 未更新 / 全ポート）
-# --------------------
-if st.session_state.get("mode") == "admin":
-    st.header("管理画面")
-    tab_missing, tab_all = st.tabs(["未更新港の編集", "全港一覧"])
-
-    with tab_missing:
-        st.subheader("未更新港の編集")
-        if missing_ports:
-            sel_missing = st.selectbox("編集する未更新港", options=missing_ports, key="sel_missing_admin")
-            st.markdown(f"## {sel_missing} の入力（未更新）")
-            current = PRICES_CFG.get(sel_missing, {})
-            # 行ごとに2カラムで入力フィールドを作る（表示順を安定）
-            inputs_miss = {}
-            for row_start in range(0, len(ITEMS_CFG), 2):
-                c_left, c_right = st.columns(2)
-                name, base = ITEMS_CFG[row_start]
-                default = "" if name not in current else str(current[name])
-                with c_left:
-                    inputs_miss[name] = st.text_input(f"{name} (base: {base})", value=default, key=f"{sel_missing}_{name}_miss_admin")
-                if row_start + 1 < len(ITEMS_CFG):
-                    name2, base2 = ITEMS_CFG[row_start + 1]
-                    default2 = "" if name2 not in current else str(current[name2])
-                    with c_right:
-                        inputs_miss[name2] = st.text_input(f"{name2} (base: {base2})", value=default2, key=f"{sel_missing}_{name2}_miss_admin")
-
-            col_ok_miss, col_reset_miss, col_refresh_miss = st.columns([1,1,1])
-            with col_ok_miss:
-                if st.button("保存（未更新港）", key=f"save_miss_{sel_missing}"):
-                    new_row = {}
-                    invalids = []
-                    for name, base in ITEMS_CFG:
-                        raw = inputs_miss.get(name, "")
-                        s = (raw or "").strip().replace(",", "")
-                        s = s.translate(str.maketrans("０１２３４５６７８９－＋．，", "0123456789-+.,"))
-                        if s == "" or not re.fullmatch(r"\d+", s):
-                            invalids.append(name)
-                        else:
-                            v = int(s)
-                            if v < 0:
-                                invalids.append(name)
-                            else:
-                                new_row[name] = v
-                    if invalids:
-                        st.error("不正な入力があります: " + ", ".join(invalids))
-                    else:
-                        PRICES_CFG[sel_missing] = new_row
-                        cfg["PRICES"] = PRICES_CFG
-                        try:
-                            resp = save_cfg_to_jsonbin(cfg)
-                            st.success(f"{sel_missing} を保存しました。HTTP {resp.status_code}")
-                            new_cfg = fetch_cfg_from_jsonbin()
-                            if new_cfg:
-                                cfg = new_cfg
-                                PRICES_CFG = cfg.get("PRICES", {})
-                                safe_rerun()
-                            else:
-                                st.info("保存成功。ページを手動で再読み込みしてください。")
-                        except Exception as e:
-                            st.error(f"保存に失敗しました: {e}")
-
-            with col_reset_miss:
-                if st.button("この未更新港を base にリセット", key=f"reset_miss_{sel_missing}"):
-                    PRICES_CFG = reset_port_to_base(sel_missing, ITEMS_CFG, PRICES_CFG)
-                    cfg["PRICES"] = PRICES_CFG
-                    try:
-                        resp = save_cfg_to_jsonbin(cfg)
-                        st.success(f"{sel_missing} を base にリセットしました。HTTP {resp.status_code}")
-                        new_cfg = fetch_cfg_from_jsonbin()
-                        if new_cfg:
-                            cfg = new_cfg
-                            PRICES_CFG = cfg.get("PRICES", {})
-                            safe_rerun()
-                    except Exception as e:
-                        st.error(f"リセットに失敗しました: {e}")
-
-            with col_refresh_miss:
-                if st.button("この港の最新データを再取得", key=f"refresh_miss_{sel_missing}"):
-                    new_cfg = fetch_cfg_from_jsonbin()
-                    if new_cfg:
-                        cfg = new_cfg
-                        PRICES_CFG = cfg.get("PRICES", {})
-                        st.success("最新データを取得しました。")
-                        safe_rerun()
-                    else:
-                        st.error("再取得に失敗しました。")
+    if st.button("検索"):
+        if cash is None:
+            st.error("所持金を入力してください（空欄不可）。")
         else:
-            st.info("未更新の港はありません。")
-
-    with tab_all:
-        st.subheader("全港一覧")
-        sel_port_all = st.selectbox("編集する港を選択", options=PORTS_CFG, key="sel_port_all_admin")
-        st.markdown(f"## {sel_port_all} の価格（編集可）")
-        current_row = PRICES_CFG.get(sel_port_all, {})
-        # 行ごとに2カラムで入力フィールドを作る（表示順を安定）
-        inputs_all = {}
-        for row_start in range(0, len(ITEMS_CFG), 2):
-            c_left, c_right = st.columns(2)
-            name, base = ITEMS_CFG[row_start]
-            default = "" if name not in current_row else str(current_row[name])
-            with c_left:
-                inputs_all[name] = st.text_input(f"{name} (base: {base})", value=default, key=f"{sel_port_all}_{name}_all_admin")
-            if row_start + 1 < len(ITEMS_CFG):
-                name2, base2 = ITEMS_CFG[row_start + 1]
-                default2 = "" if name2 not in current_row else str(current_row[name2])
-                with c_right:
-                    inputs_all[name2] = st.text_input(f"{name2} (base: {base2})", value=default2, key=f"{sel_port_all}_{name2}_all_admin")
-
-        col_ok_all, col_refresh_all = st.columns([1,1])
-        with col_ok_all:
-            if st.button("保存（この港）", key=f"save_all_{sel_port_all}"):
-                new_row = {}
-                invalids = []
-                for name, base in ITEMS_CFG:
-                    raw = inputs_all.get(name, "")
-                    s = (raw or "").strip().replace(",", "")
-                    s = s.translate(str.maketrans("０１２３４５６７８９－＋．，", "0123456789-+.,"))
-                    if s == "" or not re.fullmatch(r"\d+", s):
-                        invalids.append(name)
-                    else:
-                        v = int(s)
-                        if v < 0:
-                            invalids.append(name)
-                        else:
-                            new_row[name] = v
-                if invalids:
-                    st.error("不正な入力があります: " + ", ".join(invalids))
-                else:
-                    PRICES_CFG[sel_port_all] = new_row
-                    cfg["PRICES"] = PRICES_CFG
-                    try:
-                        resp = save_cfg_to_jsonbin(cfg)
-                        st.success(f"{sel_port_all} を保存しました。HTTP {resp.status_code}")
-                        new_cfg = fetch_cfg_from_jsonbin()
-                        if new_cfg:
-                            cfg = new_cfg
-                            PRICES_CFG = cfg.get("PRICES", {})
-                            safe_rerun()
-                        else:
-                            st.info("保存成功。ページを手動で再読み込みしてください。")
-                    except Exception as e:
-                        st.error(f"保存に失敗しました: {e}")
-
-        with col_refresh_all:
-            if st.button("この港の最新データを再取得", key=f"refresh_all_{sel_port_all}"):
-                new_cfg = fetch_cfg_from_jsonbin()
-                if new_cfg:
-                    cfg = new_cfg
-                    PRICES_CFG = cfg.get("PRICES", {})
-                    st.success("最新データを取得しました。")
-                    safe_rerun()
-                else:
-                    st.error("再取得に失敗しました。")
-
-        # ---------- 全ポート最下部: 全件リセット（パスワード保護） ----------
-        st.markdown("---")
-        st.write("全ポートを base 値にリセットします。実行すると現在の全データが上書きされます。")
-        pwd = st.text_input("操作パスワードを入力してください", type="password", key="reset_all_pwd")
-        if st.button("全港を base 値にリセット（パスワード必須）", key="reset_all_confirm"):
-            if pwd == RESET_PASSWORD:
-                PRICES_CFG = reset_all_ports_to_base(ITEMS_CFG, PRICES_CFG, PORTS_CFG)
-                cfg["PRICES"] = PRICES_CFG
-                try:
-                    resp = save_cfg_to_jsonbin(cfg)
-                    st.success(f"全港を base にリセットしました。HTTP {resp.status_code}")
-                    new_cfg = fetch_cfg_from_jsonbin()
-                    if new_cfg:
-                        cfg = new_cfg
-                        PRICES_CFG = cfg.get("PRICES", {})
-                        safe_rerun()
-                except Exception as e:
-                    st.error(f"全件リセットに失敗しました: {e}")
+            # 在庫の不正入力フラグチェック
+            invalid_found = False
+            for name in stock_inputs.keys():
+                if st.session_state.get(f"stk_{name}_invalid", False):
+                    st.error(f"{name} の入力が不正です。半角整数で入力してください。")
+                    invalid_found = True
+            if invalid_found:
+                st.error("不正入力があるため中止します。")
             else:
-                st.error("パスワードが違います。操作は中止されました。")
+                # current_stock 初期化（全品目 0）、トップ5の入力値だけ反映
+                current_stock = {n: 0 for n, _ in ITEMS}
+                for name in stock_inputs:
+                    val = stock_inputs.get(name)
+                    current_stock[name] = int(val) if val is not None else 0
 
-    st.markdown("---")
-    if st.button("管理モードを終了して戻る", key="btn_close_admin"):
-        st.session_state["mode"] = "view"
-        safe_rerun()
+                results = []
+                for dest in ports:
+                    if dest == current_port:
+                        continue
+                    plan, cost, profit = greedy_plan_for_destination(current_port, dest, cash, current_stock, price_matrix)
+                    results.append((dest, plan, cost, profit))
+                results.sort(key=lambda x: x[3], reverse=True)
+                top_results = results[:top_k]
+
+                if not top_results or all(r[3] <= 0 for r in top_results):
+                    st.info("所持金・在庫の範囲で利益が見込める到着先が見つかりませんでした。")
+                else:
+                    for rank, (dest, plan, cost, profit) in enumerate(top_results, start=1):
+                        # そのまま貼れる置換コード（シンプル）
+                        st.markdown(
+                            f'''
+                            <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+                              <span style="font-size:0.85em; color:#444; margin-right:4px;">到着先</span>
+                              <span style="font-size:1.15em; font-weight:700; color:#111;">{dest}</span>
+                              <span style="margin:0 8px; color:#ccc;">|</span>
+                              <span style="font-size:0.85em; color:#444; margin-right:4px;">想定利益</span>
+                              <span style="font-size:1.15em; font-weight:700; color:#111;">{profit:,}</span>
+                            </div>
+                            ''',
+                            unsafe_allow_html=True
+                        )
+
+                        if not plan:
+                            st.write("購入候補がありません（利益が出ない、もしくは在庫不足）。")
+                            continue
+
+                        # 購入候補だけを使って DataFrame を作成（余計な列や NaN を生まない）
+                        df_rows = []
+                        for item, qty, buy, sell, unit_profit in plan:
+                            df_rows.append({
+                                "品目": item,
+                                "購入数": int(qty),
+                                "想定利益": int(qty * unit_profit)
+                            })
+                        df_out = pd.DataFrame(df_rows)
+
+                        # 合計行（数値列は合計、その他はラベル）
+                        totals = {
+                            "品目": "合計",
+                            "購入数": int(df_out["購入数"].sum()) if not df_out.empty else 0,
+                            "想定利益": int(df_out["想定利益"].sum()) if not df_out.empty else 0
+                        }
+                        df_disp = pd.concat([df_out, pd.DataFrame([totals])], ignore_index=True)
+
+                        # フォーマットして表示（行数に応じた高さを指定）
+                        try:
+                            num_format = {
+                                "購入数": "{:,.0f}",
+                                "想定利益": "{:,.0f}"
+                            }
+                            styled = df_disp.style.format(num_format, na_rep="")
+                            st.dataframe(styled, height=max(200, 40 * (len(df_disp) + 1)))
+                        except Exception:
+                            st.table(df_disp)
+
+                        st.write("---")
+
+with col3:
+    if st.checkbox("価格表を表示"):
+        # 表示用 DataFrame を作る
+        rows = []
+        for name, _ in ITEMS:
+            row = {"品目": name}
+            for p in ports:
+                row[p] = price_matrix[name].get(p, 0)
+            rows.append(row)
+        df_all = pd.DataFrame(rows).set_index("品目")
+        st.dataframe(df_all, height=600)
