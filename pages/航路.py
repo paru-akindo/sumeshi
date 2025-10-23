@@ -269,12 +269,32 @@ with col2:
                         # そのまま貼れる置換コード（シンプル）
                         st.markdown(
                             f'''
-                            <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
-                              <span style="font-size:0.85em; color:#444; margin-right:4px;">到着先</span>
-                              <span style="font-size:1.15em; font-weight:700; color:#111;">{dest}</span>
-                              <span style="margin:0 8px; color:#ccc;">|</span>
-                              <span style="font-size:0.85em; color:#444; margin-right:4px;">想定利益</span>
-                              <span style="font-size:1.15em; font-weight:700; color:#111;">{profit:,}</span>
+                            <style>
+                              .dest-row {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:6px 8px; border-radius:6px; }}
+                              /* ライトモード用 */
+                              @media (prefers-color-scheme: light) {{
+                                .dest-row {{ background: rgba(255,255,255,0.0); }}
+                                .dest-row .label {{ color:#444; }}
+                                .dest-row .value {{ color:#111; }}
+                                .dest-row .sep {{ color:#ccc; }}
+                              }}
+                              /* ダークモード用 */
+                              @media (prefers-color-scheme: dark) {{
+                                .dest-row {{ background: rgba(0,0,0,0.0); }}
+                                .dest-row .label {{ color:#cfcfcf; }}
+                                .dest-row .value {{ color:#ffffff; }}
+                                .dest-row .sep {{ color:#666; }}
+                              }}
+                              /* 強制対策: ブラウザ側で色を上書きされる場合に備えた!important指定 */
+                              .dest-row .label, .dest-row .value, .dest-row .sep {{ -webkit-text-fill-color: initial !important; }}
+                            </style>
+
+                            <div class="dest-row">
+                              <span class="label" style="font-size:0.85em; margin-right:4px;">到着先</span>
+                              <span class="value" style="font-size:1.15em; font-weight:700;">{dest}</span>
+                              <span class="sep" style="margin:0 8px;">|</span>
+                              <span class="label" style="font-size:0.85em; margin-right:4px;">想定利益</span>
+                              <span class="value" style="font-size:1.15em; font-weight:700;">{profit:,}</span>
                             </div>
                             ''',
                             unsafe_allow_html=True
