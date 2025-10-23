@@ -220,7 +220,7 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
 # UI
 # --------------------
 st.title("何買おうかな")
-st.markdown(f'<div style="margin-bottom:8px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示）</a> | <a href="{CSV_URL}" target="_blank" rel="noopener noreferrer">CSV を開く</a></div>', unsafe_allow_html=True)
+st.markdown(f'<div style="margin-bottom:8px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示） unsafe_allow_html=True)
 
 # 価格取得
 try:
