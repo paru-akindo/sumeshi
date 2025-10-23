@@ -355,23 +355,23 @@ with col2:
 
                             # 一手目プラン表
                             if meta.get("first_plan"):
-                                df1 = pd.DataFrame([{"品目":i,"購入数":q,"購入単価":b,"売価":s,"単位差益":u,"想定利益":int(q*u)} for i,q,b,s,u in meta["first_plan"]])
-                                totals1 = {"品目":"合計","購入数":int(df1["購入数"].sum()) if not df1.empty else 0,"購入単価":"","売価":"","単位差益":"","想定利益":int(df1["想定利益"].sum()) if not df1.empty else 0}
+                                df1 = pd.DataFrame([{"品目":i,"購入数":q,"想定利益":int(q*u)} for i,q,b,s,u in meta["first_plan"]])
+                                totals1 = {"品目":"合計","購入数":int(df1["購入数"].sum()) if not df1.empty else 0,"想定利益":int(df1["想定利益"].sum()) if not df1.empty else 0}
                                 df1_disp = pd.concat([df1, pd.DataFrame([totals1])], ignore_index=True)
                                 st.write("一手目プラン（現在港→到着先）")
                                 try:
-                                    st.dataframe(df1_disp.style.format({"購入数":"{:,.0f}","購入単価":"{:,.0f}","売価":"{:,.0f}","単位差益":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df1_disp)+1)))
+                                    st.dataframe(df1_disp.style.format({"購入数":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df1_disp)+1)))
                                 except Exception:
                                     st.table(df1_disp)
 
                             # 二手目プラン表
                             if meta.get("second_plan"):
-                                df2 = pd.DataFrame([{"品目":i,"購入数":q,"購入単価":b,"売価":s,"単位差益":u,"想定利益":int(q*u)} for i,q,b,s,u in meta["second_plan"]])
-                                totals2 = {"品目":"合計","購入数":int(df2["購入数"].sum()) if not df2.empty else 0,"購入単価":"","売価":"","単位差益":"","想定利益":int(df2["想定利益"].sum()) if not df2.empty else 0}
+                                df2 = pd.DataFrame([{"品目":i,"購入数":q,"想定利益":int(q*u)} for i,q,b,s,u in meta["second_plan"]])
+                                totals2 = {"品目":"合計","購入数":int(df2["購入数"].sum()) if not df2.empty else 0,"想定利益":int(df2["想定利益"].sum()) if not df2.empty else 0}
                                 df2_disp = pd.concat([df2, pd.DataFrame([totals2])], ignore_index=True)
                                 st.write(f"二手目プラン（到着先→売却先: {meta['second_dest']}）")
                                 try:
-                                    st.dataframe(df2_disp.style.format({"購入数":"{:,.0f}","購入単価":"{:,.0f}","売価":"{:,.0f}","単位差益":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df2_disp)+1)))
+                                    st.dataframe(df2_disp.style.format({"購入数":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df2_disp)+1)))
                                 except Exception:
                                     st.table(df2_disp)
                             st.write("---")
@@ -417,15 +417,12 @@ with col2:
                             df_out = pd.DataFrame([{
                                 "品目": item,
                                 "購入数": qty,
-                                "購入単価": buy,
-                                "売価": sell,
-                                "単位差益": unit_profit,
                                 "想定利益": int(qty * unit_profit)
                             } for item, qty, buy, sell, unit_profit in plan])
-                            totals = {"品目":"合計","購入数":int(df_out["購入数"].sum()),"購入単価":"","売価":"","単位差益":"","想定利益":int(df_out["想定利益"].sum())}
+                            totals = {"品目":"合計","購入数":int(df_out["購入数"].sum()),"想定利益":int(df_out["想定利益"].sum())}
                             df_disp = pd.concat([df_out, pd.DataFrame([totals])], ignore_index=True)
                             try:
-                                st.dataframe(df_disp.style.format({"購入数":"{:,.0f}","購入単価":"{:,.0f}","売価":"{:,.0f}","単位差益":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df_disp)+1)))
+                                st.dataframe(df_disp.style.format({"購入数":"{:,.0f}","想定利益":"{:,.0f}"}, na_rep=""), height= max(140, 40*(len(df_disp)+1)))
                             except Exception:
                                 st.table(df_disp)
 
