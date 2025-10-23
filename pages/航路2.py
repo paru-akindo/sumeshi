@@ -163,9 +163,11 @@ def greedy_plan_for_destination_general(current_port: str, dest_port: str, cash:
         remaining_cash -= qty * buy
         if remaining_cash <= 0:
             break
+
     total_cost = sum(q * b for _, q, b, _, _ in plan)
     total_profit = sum(q * up for _, q, _, _, up in plan)
-    remaining_cash_after_sell = remaining_cash + total_profit
+    # 修正点: 一手目終了後の手元資産 = 元手 cash + 一手目で得た利益 total_profit
+    remaining_cash_after_sell = cash + total_profit
     return plan, int(total_cost), int(total_profit), int(remaining_cash_after_sell)
 
 # --------------------
@@ -198,6 +200,7 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
     best_second_profit = 0
     best_second_plan = []
     best_second_dest = None
+    # 重要: 二手目の購入上限は cash_after_sell（= cash + first_profit）を使う
     for s in second_candidates:
         plan2, cost2, profit2, cash_after2 = greedy_plan_for_destination_general(dest_port, s, cash_after_sell, None, price_matrix)
         if profit2 > best_second_profit:
