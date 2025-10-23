@@ -173,18 +173,20 @@ def greedy_plan_for_destination_general(current_port: str, dest_port: str, cash:
 # --------------------
 # lookahead 評価関数
 # --------------------
-def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock: Dict[str,int], price_matrix: Dict[str,Dict[str,int]], second_k: Optional[int] = None):
-    first_plan, first_cost, first_profit, cash_after_sell = greedy_plan_for_destination_general(current_port, dest_port, cash, stock, price_matrix)
+def evaluate_with_lookahead(current_port, dest_port, cash, stock, price_matrix, second_prelimit=None):
+    # 一手目（入力在庫を使う想定）
+    first_plan, first_cost, first_profit, cash_after_first = greedy_plan_for_destination_general(
+        current_port, dest_port, cash, stock, price_matrix
+    )
 
-    # 二手目候補リスト（dest_port を除く）
+    # 二手目候補全列挙（dest_port を除く）
     example_item = next(iter(price_matrix))
-    ports_list = list(price_matrix[example_item].keys())
-    second_candidates = [p for p in ports_list if p != dest_port]
+    all_ports = [p for p in price_matrix[example_item].keys() if p != dest_port]
 
-    # 候補絞り（heuristic）: second_k が指定されたら単純スコアで上位Kに絞る
-    if second_k is not None and second_k < len(second_candidates):
+    # optional: second_prelimit が指定されればヒューリスティックで絞る（計算高速化用）
+    if second_prelimit is not None and second_prelimit < len(all_ports):
         scores = []
-        for s in second_candidates:
+        for s in all_ports:
             score = 0
             for item, _ in ITEMS:
                 buy = price_matrix[item].get(dest_port, 0)
@@ -195,28 +197,29 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
                         score += unit
             scores.append((s, score))
         scores.sort(key=lambda x: x[1], reverse=True)
-        second_candidates = [s for s,_ in scores[:second_k]]
+        second_candidates = [s for s,_ in scores[:second_prelimit]]
+    else:
+        second_candidates = all_ports
 
-    best_second_profit = 0
-    best_second_plan = []
-    best_second_dest = None
-    # 重要: 二手目の購入上限は cash_after_sell（= cash + first_profit）を使う
+    # 各二手目候補を完全評価してリスト化
+    second_results = []
     for s in second_candidates:
-        plan2, cost2, profit2, cash_after2 = greedy_plan_for_destination_general(dest_port, s, cash_after_sell, None, price_matrix)
-        if profit2 > best_second_profit:
-            best_second_profit = profit2
-            best_second_plan = plan2
-            best_second_dest = s
+        plan2, cost2, profit2, cash_after2 = greedy_plan_for_destination_general(
+            dest_port, s, cash_after_first, None, price_matrix
+        )
+        second_results.append((s, plan2, int(profit2), int(cash_after2)))
 
-    total_profit = first_profit + best_second_profit
+    # 二手目を利益でソート（高い順）
+    second_results.sort(key=lambda x: x[2], reverse=True)
+
+    total_best_profit = first_profit + (second_results[0][2] if second_results else 0)
     return {
-        "total_profit": int(total_profit),
-        "first_profit": int(first_profit),
-        "second_best_profit": int(best_second_profit),
+        "dest": dest_port,
         "first_plan": first_plan,
-        "second_plan": best_second_plan,
-        "second_dest": best_second_dest,
-        "cash_after_first_sell": int(cash_after_sell)
+        "first_profit": int(first_profit),
+        "cash_after_first": int(cash_after_first),
+        "second_candidates": second_results,   # sorted list
+        "total_best_profit": int(total_best_profit)
     }
 
 # --------------------
