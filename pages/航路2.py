@@ -7,6 +7,7 @@ import re
 import requests
 from io import StringIO
 from copy import deepcopy
+from math import prod
 
 st.set_page_config(page_title="航路買い物", layout="wide")
 
@@ -218,6 +219,117 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
         "second_dest": best_second_dest,
         "cash_after_first_sell": int(cash_after_sell)
     }
+def evaluate_cycle_percent(route_steps, start_cash):
+    """
+    route_steps: list of step dicts each has 'cash_after' (int)
+    start_cash: initial cash (int)
+    returns: total_multiplier, avg_multiplier_per_move, pct_per_move, total_pct
+    """
+    start = float(max(1, int(start_cash)))
+    multipliers = []
+    prev_cash = start
+    for s in route_steps:
+        cur_cash = float(max(1, int(s.get("cash_after", prev_cash))))
+        m = cur_cash / prev_cash if prev_cash > 0 else 1.0
+        multipliers.append(m)
+        prev_cash = cur_cash
+    if not multipliers:
+        return 1.0, 1.0, 0.0, 0.0
+    total_multiplier = prod(multipliers)
+    moves = len(multipliers)
+    avg_multiplier = total_multiplier ** (1.0 / moves)
+    return total_multiplier, avg_multiplier, (avg_multiplier - 1.0) * 100.0, (total_multiplier - 1.0) * 100.0
+
+def generate_cycles_by_percent(start_port: str,
+                               start_cash: int,
+                               price_matrix: Dict,
+                               stock_for_first_step: Dict,
+                               depth: int = 3,
+                               beam_width: int = 20,
+                               top_r: int = 5,
+                               stock_mode_infinite: bool = True,
+                               restrict_to_uncovered: Optional[set] = None):
+    """
+    start_port 発で深さ depth の simple cycle (start->...->start) を探索し、
+    各ルートを「1移動あたりの平均%増」でソートして上位 top_r を返す。
+    """
+    start_cash = int(start_cash)
+    example_item = next(iter(price_matrix))
+    all_ports = list(price_matrix[example_item].keys())
+
+    # ノード: {'port','cash','route','steps','visits'}
+    initial = {'port': start_port, 'cash': start_cash, 'route': [start_port], 'steps': [], 'visits': {start_port: 1}}
+    frontier = [initial]
+
+    for depth_idx in range(1, depth+1):
+        next_front = []
+        for node in frontier:
+            cur_port = node['port']
+            cur_cash = node['cash']
+            candidates = list(all_ports)
+            if restrict_to_uncovered is not None:
+                # allow returning to start_port even if not in restrict set
+                candidates = [p for p in candidates if (p in restrict_to_uncovered) or (p == start_port)]
+            for cand in candidates:
+                if cand == cur_port:
+                    continue
+                # simple-cycle: 途中で同一港再訪しない（start_port は例外で最後に戻る）
+                if node['visits'].get(cand, 0) > 0 and cand != start_port:
+                    continue
+                # avoid trivial immediate back-and-forth
+                if len(node['route']) >= 2 and cand == node['route'][-2]:
+                    continue
+                # Choose stock argument: first step uses stock_for_first_step, later steps use infinite if flag set
+                if depth_idx == 1:
+                    stock_arg = stock_for_first_step
+                else:
+                    stock_arg = None if stock_mode_infinite else stock_for_first_step
+                plan, cost, profit, cash_after = greedy_plan_for_destination_general(cur_port, cand, cur_cash, stock_arg, price_matrix)
+                new_visits = dict(node['visits'])
+                new_visits[cand] = new_visits.get(cand, 0) + 1
+                new_node = {
+                    'port': cand,
+                    'cash': int(cash_after),
+                    'route': node['route'] + [cand],
+                    'steps': node['steps'] + [{'from': cur_port, 'to': cand, 'plan': plan, 'step_profit': int(profit), 'cash_after': int(cash_after)}],
+                    'visits': new_visits
+                }
+                next_front.append(new_node)
+        # prune: keep top beam_width by cash
+        next_front.sort(key=lambda x: x['cash'], reverse=True)
+        frontier = next_front[:beam_width]
+        if not frontier:
+            break
+
+    # collect cycles by attempting return to start
+    cycles = []
+    for node in frontier:
+        cur_port = node['port']
+        cur_cash = node['cash']
+        if cur_port == start_port:
+            steps = node['steps']
+            final_cash = node['cash']
+            profit = final_cash - start_cash
+            total_mul, avg_mul, pct_per_move, total_pct = evaluate_cycle_percent(steps, start_cash)
+            cycles.append({'route': node['route'], 'steps': steps, 'final_cash': final_cash, 'profit': profit,
+                           'total_multiplier': total_mul, 'avg_multiplier': avg_mul,
+                           'pct_per_move': pct_per_move, 'total_pct': total_pct})
+            continue
+        # one-step return
+        planb, costb, profitb, cash_afterb = greedy_plan_for_destination_general(cur_port, start_port, cur_cash, None, price_matrix)
+        if cash_afterb is None:
+            continue
+        steps = node['steps'] + [{'from': cur_port, 'to': start_port, 'plan': planb, 'step_profit': int(profitb), 'cash_after': int(cash_afterb)}]
+        final_cash = int(cash_afterb)
+        profit = final_cash - start_cash
+        total_mul, avg_mul, pct_per_move, total_pct = evaluate_cycle_percent(steps, start_cash)
+        cycles.append({'route': node['route'] + [start_port], 'steps': steps, 'final_cash': final_cash, 'profit': profit,
+                       'total_multiplier': total_mul, 'avg_multiplier': avg_mul,
+                       'pct_per_move': pct_per_move, 'total_pct': total_pct})
+
+    # sort by avg % per move (descending), then total %
+    cycles.sort(key=lambda x: (x['pct_per_move'], x['total_pct']), reverse=True)
+    return cycles[:top_r]
 
 # --------------------
 # UI
@@ -435,3 +547,44 @@ with col3:
             rows.append(row)
         df_all = pd.DataFrame(rows).set_index("品目")
         st.dataframe(df_all, height=600)
+
+st.header("在庫潤沢時の効率的閉路（%増で比較）")
+depth = st.number_input("ルート長（移動回数, 例 3 = A→B→C→A）", min_value=2, max_value=6, value=3)
+beam = st.number_input("ビーム幅 (候補絞り)", min_value=5, max_value=200, value=40)
+top_r = st.number_input("表示上位候補数", min_value=1, max_value=20, value=5)
+stock_infinite_mode = st.checkbox("在庫潤沢モード（2手目以降在庫無限扱い）", value=True)
+restrict_cover_mode = st.checkbox("全港網羅モード（未カバー港優先で探索）", value=False)
+
+if st.button("閉路を探す（%効率基準）"):
+    # 必須入力チェック（current_port, cash, current_stock, price_matrix を仮定）
+    if cash is None:
+        st.error("所持金を入力してください。")
+    else:
+        # restrict_to_uncovered を用いる場合は未カバー集合を作る（ここでは全港を対象）
+        restrict_set = None
+        if restrict_cover_mode:
+            # exclude start port from targets
+            example_item = next(iter(price_matrix))
+            all_ports = set(price_matrix[example_item].keys())
+            if current_port in all_ports:
+                all_ports.remove(current_port)
+            restrict_set = all_ports
+
+        cycles = generate_cycles_by_percent(current_port, cash, price_matrix, current_stock,
+                                           depth=depth, beam_width=beam, top_r=top_r,
+                                           stock_mode_infinite=stock_infinite_mode,
+                                           restrict_to_uncovered=restrict_set)
+        if not cycles:
+            st.info("条件に合う閉路が見つかりませんでした。パラメータを緩和してください。")
+        else:
+            for idx, c in enumerate(cycles, start=1):
+                st.markdown(f"### {idx}. ルート: {' → '.join(c['route'])}")
+                st.markdown(f"- 総増分: {c['total_pct']:.2f}%  / 1移動あたり平均増分: {c['pct_per_move']:.3f}%  (最終資産: {c['final_cash']:,})")
+                with st.expander("ステップ詳細"):
+                    for sidx, s in enumerate(c['steps'], start=1):
+                        st.write(f"{sidx}. {s['from']} → {s['to']} : 想定利益 {s['step_profit']:,} , 到着時資産 {s['cash_after']:,}")
+                        if s.get('plan'):
+                            df = pd.DataFrame([{"品目":i,"購入数":q,"購入単価":b,"売価":sv,"単位差益":u,"想定利益":int(q*u)} for i,q,b,sv,u in s['plan']])
+                            if not df.empty:
+                                st.dataframe(df, height=140)
+
