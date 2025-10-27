@@ -606,7 +606,7 @@ for p in ports:
 df_preview = pd.DataFrame(rows)
 st.dataframe(df_preview, height=320)
 st.markdown("---")
-st.header("ルート解析")
+st.subheader("ルート解析")
 
 AUTO_TOP_K = 5
 CASH_DEFAULT = 50000
@@ -667,7 +667,6 @@ with st.spinner("自動解析（複数開始候補）実行中..."):
 if not start_metrics:
     st.info("自動解析で開始候補が見つかりませんでした。")
 else:
-    st.subheader(f"代表表示: 開始候補 {rep['start']} のルート群と指標")
     res = rep['result']
     routes = res.get('routes', [])
 
