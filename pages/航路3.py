@@ -385,6 +385,27 @@ except Exception as e:
     st.error(f"スプレッドシート（CSV）からの読み込みに失敗しました: {e}")
     st.stop()
 
+# --------------------
+# 復活: 単一遷移プレビュー（ページ上部に表示）
+# --------------------
+CASH_DEFAULT = 50000
+mapping_preview, candidates_preview = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, CASH_DEFAULT)
+
+st.subheader("各港から一手で最適な行き先（乗数・買う物）")
+rows = []
+for p in ports:
+    outs = mapping_preview.get(p, {})
+    if not outs:
+        rows.append({"出発港": p, "最適到着": "-", "乗数": "-", "買う物": "-"})
+        continue
+    best_q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
+    items_summary = f"{info.get('chosen_item') or '-'}"
+    multiplier = info.get('multiplier', 1.0)
+    rows.append({"出発港": p, "最適到着": best_q, "乗数": f"{multiplier:.2f}", "買う物": items_summary})
+
+df_preview = pd.DataFrame(rows)
+st.dataframe(df_preview, height=320)
+
 # レイアウト（既存の UI を維持）
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -590,7 +611,7 @@ st.header("自動解析（上位5開始候補から比較）")
 AUTO_TOP_K = 5
 CASH_DEFAULT = 50000
 
-# 単一遷移プレビュー（内部計算）
+# 単一遷移プレビュー（内部計算） -- already computed above but recompute to be safe
 mapping_preview, candidates_preview = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, CASH_DEFAULT)
 
 # start_order を単一遷移の評価で作る（出発港順）
@@ -642,11 +663,10 @@ with st.spinner("自動解析（複数開始候補）実行中..."):
     rep = start_best_overall
     other = start_best_single_route
 
-# Display representative result only; do not show the removed summary lines
+# Display representative result only
 if not start_metrics:
     st.info("自動解析で開始候補が見つかりませんでした。")
 else:
-    # Representative display
     st.subheader(f"代表表示: 開始候補 {rep['start']} のルート群と指標")
     res = rep['result']
     routes = res.get('routes', [])
