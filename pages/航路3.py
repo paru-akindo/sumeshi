@@ -1,6 +1,6 @@
 # main.py
 import streamlit as st
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 import re
@@ -9,7 +9,7 @@ from io import StringIO
 from copy import deepcopy
 from math import prod
 
-st.set_page_config(page_title="航路買い物（統合版）", layout="wide")
+st.set_page_config(page_title="航路買い物（統合版・上位k比較表示・重み付け平均）", layout="wide")
 
 # --------------------
 # 設定: ITEMS はスプレッドシートの品目列ヘッダと一致させること
@@ -24,7 +24,6 @@ ITEMS = [
 
 # --------------------
 # スプレッドシート設定（公開CSV）
-# SPREADSHEET_ID と GID を自分のものに置き換えてください
 # --------------------
 SPREADSHEET_ID = "1ft5FlwM5kaZK7B4vLQg2m1WYe5nWNb0udw5isFwDWy0"
 GID = "805544474"
@@ -131,9 +130,7 @@ def fetch_price_matrix_from_csv_auto(url: str):
         return ports, price_matrix
 
 # --------------------
-# 拡張 greedy: stock==None -> 在庫無限(購入は cash 制約のみ)
-# returns plan, total_cost, total_profit, remaining_cash_after_sell
-# plan: list of (item, qty, buy, sell, unit_profit)
+# greedy general (既存)
 # --------------------
 def greedy_plan_for_destination_general(current_port: str, dest_port: str, cash: int, stock: Optional[Dict[str,int]], price_matrix: Dict[str,Dict[str,int]]):
     cash = int(cash) if cash is not None else 0
@@ -216,7 +213,7 @@ def evaluate_with_lookahead(current_port: str, dest_port: str, cash: int, stock:
     }
 
 # --------------------
-# 以下は「単一品目近似・再計算」用の関数群（自動解析表示に使う）
+# 単一品目近似関数群（自動解析用）
 # --------------------
 def greedy_one_item_for_destination(current_port: str, dest_port: str, cash: int, price_matrix: Dict[str,Dict[str,int]]):
     cash = int(max(1, cash))
@@ -376,7 +373,7 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
     return results_per_start
 
 # --------------------
-# UI (既存の手動検索パート：元のUIを保持)
+# UI (手動検索パートを保持)
 # --------------------
 st.title("何買おうかな（手動検索）")
 st.markdown(f'<div style="margin-top:6px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示）</a></div>', unsafe_allow_html=True)
@@ -388,7 +385,7 @@ except Exception as e:
     st.error(f"スプレッドシート（CSV）からの読み込みに失敗しました: {e}")
     st.stop()
 
-# レイアウト（元のコードをほぼそのまま維持）
+# レイアウト（既存の UI を維持）
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     current_port = st.selectbox("現在港", ports, index=0)
@@ -583,50 +580,113 @@ with col3:
         st.dataframe(df_all, height=600)
 
 # --------------------
-# 自動解析と表示（ページ下部に追加）
-# - 開いたら自動で単一遷移表を表示し、開始候補上位1で閉路群生成を実行して結果を表示します
+# 自動解析（上位kから検討）: 要求に基づくロジックを実装
+# overall_avg を「ルートの移動回数で重み付けた平均」に変更
 # --------------------
 st.markdown("---")
-st.header("自動解析（単一品目近似・再計算・開始候補上位1で自動実行）")
+st.header("自動解析（上位k開始候補から比較）")
 
+# パラメータ: 何位までの開始候補を試すか（UIで調整可能）
+AUTO_TOP_K = st.number_input("自動解析で試す開始候補の上位k", min_value=1, max_value=min(10, max(1, len(ports)-1)), value=5, step=1)
 CASH_DEFAULT = 50000
-TOP_K_START_FIXED = 1
 
-# 単一遷移プレビュー（自動）
+# 単一遷移プレビュー（内部計算）
 mapping_preview, candidates_preview = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, CASH_DEFAULT)
 
-rows = []
-for p in ports:
-    outs = mapping_preview.get(p, {})
-    if not outs:
-        rows.append({"出発港": p, "最適到着": "-", "乗数": "-", "買う物": "-"})
-        continue
-    best_q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
-    items_summary = f"{info.get('chosen_item') or '-'}"
-    multiplier = info.get('multiplier', 1.0)
-    rows.append({"出発港": p, "最適到着": best_q, "乗数": f"{multiplier:.2f}", "買う物": items_summary})
+# start_order を単一遷移の評価で作る（出発港順）
+singles_sorted = sorted(candidates_preview, key=lambda x: x[2], reverse=True)
+start_ports_order = []
+for p, q, m in singles_sorted:
+    if p not in start_ports_order:
+        start_ports_order.append(p)
 
-df_preview = pd.DataFrame(rows)
-st.subheader("各港から一手で最適な行き先（乗数・買う物）")
-st.dataframe(df_preview, height=320)
+start_ports_try = start_ports_order[:AUTO_TOP_K]
 
-st.markdown("自動で開始候補上位1を使って閉路群を生成します。所持金は内部固定 50,000 を使用。")
+with st.spinner("自動解析（複数開始候補）実行中..."):
+    all_results = generate_routes_greedy_cover_with_recalc(ports, price_matrix, CASH_DEFAULT, top_k_start=len(start_ports_try))
+    kept_results = [r for r in all_results if r['initial_start'] in start_ports_try]
 
-with st.spinner("自動解析中..."):
-    auto_results = generate_routes_greedy_cover_with_recalc(ports, price_matrix, CASH_DEFAULT, top_k_start=TOP_K_START_FIXED)
+    # For each start, compute metrics:
+    # - overall_avg: weighted by number of moves in each route (weight = number of steps)
+    # - max_route_avg: max route['avg_mul']
+    start_metrics = []
+    for res in kept_results:
+        routes = res.get('routes', [])
+        if not routes:
+            overall_avg = 0.0
+            max_route_avg = 0.0
+        else:
+            # compute weighted average: weight = number of moves in route = len(route)-1
+            weighted_sum = 0.0
+            total_moves = 0
+            avg_list = []
+            for rt in routes:
+                avg_mul = rt.get('avg_mul', 0.0)
+                route_nodes = rt.get('route', [])
+                moves = max(0, len(route_nodes) - 1)
+                if moves > 0:
+                    weighted_sum += avg_mul * moves
+                    total_moves += moves
+                avg_list.append(avg_mul)
+            overall_avg = float(weighted_sum / total_moves) if total_moves > 0 else 0.0
+            max_route_avg = float(np.max(avg_list)) if avg_list else 0.0
+        start_metrics.append({
+            'start': res['initial_start'],
+            'overall_avg': overall_avg,
+            'max_route_avg': max_route_avg,
+            'result': res
+        })
 
-for attempt in auto_results:
-    st.markdown(f"## 初期スタート候補: {attempt['initial_start']}")
-    if not attempt['routes']:
-        st.write("ルートが生成できませんでした。")
-        continue
-    for i, r in enumerate(attempt['routes'], start=1):
-        st.markdown(f"### ルート {i}: {' → '.join(r['route'])}")
-        total_mul = r.get('total_mul', r.get('total_mul', r['avg_mul']))
-        st.markdown(f"- カバー港数: {len(r['covered'])}  総乗数: {total_mul:.2f}  平均乗数/移動: {r['avg_mul']:.2f}")
-        with st.expander("ステップ詳細"):
-            for sidx, s in enumerate(r['steps'], start=1):
-                bought = f"{s.get('chosen_item')}" if s.get('chosen_item') else "-"
-                st.write(f"{sidx}. {s['from']} → {s['to']} : 購入 {bought} , 乗数 {s['multiplier']:.2f}")
+    # Determine the start with best overall_avg and the start that has the best single route avg
+    start_best_overall = max(start_metrics, key=lambda x: x['overall_avg']) if start_metrics else None
+    start_best_single_route = max(start_metrics, key=lambda x: x['max_route_avg']) if start_metrics else None
+
+    # Choose representative to display: use start_best_overall
+    rep = start_best_overall
+    other = start_best_single_route
+
+# Display summary and representative result
+if not start_metrics:
+    st.info("自動解析で開始候補が見つかりませんでした。")
+else:
+    st.subheader("比較結果サマリ")
+    st.markdown(f"- 試行した開始候補: **{', '.join([s for s in start_ports_try])}**")
+    st.markdown(f"- 代表として表示する開始候補（ルート移動回数で重み付けた平均乗数/移動が最大）: **{rep['start']}**  平均乗数/移動（重み付け）: **{rep['overall_avg']:.2f}**")
+    st.markdown(f"- 検討中で単一ルートの最大平均乗数/移動が最大だった開始候補: **{other['start']}**  単一ルート最大: **{other['max_route_avg']:.2f}**")
+    if rep['start'] == other['start']:
+        st.markdown("- 代表と単一ルート最大は同一の開始候補です（同じ結果）。")
+
+    st.markdown("---")
+    st.subheader(f"代表表示: 開始候補 {rep['start']} のルート群と指標")
+    res = rep['result']
+    routes = res.get('routes', [])
+
+    if not routes:
+        st.write("代表開始候補から有効なルートは見つかりませんでした。")
+    else:
+        for i, r in enumerate(routes, start=1):
+            st.markdown(f"### ルート {i}: {' → '.join(r['route'])}")
+            st.markdown(f"- カバー港数: {len(r['covered'])}  平均乗数/移動: {r['avg_mul']:.2f}  総乗数: {r['total_mul']:.2f}")
+            with st.expander("ステップ詳細"):
+                for sidx, s in enumerate(r['steps'], start=1):
+                    bought = f"{s.get('chosen_item')}" if s.get('chosen_item') else "-"
+                    st.write(f"{sidx}. {s['from']} → {s['to']} : 購入 {bought} , 乗数 {s['multiplier']:.2f}")
+
+    # If another start has a strictly higher single-route avg, note it and show its best route as comparison
+    if other and other['start'] != rep['start'] and other['max_route_avg'] > rep['overall_avg']:
+        st.markdown("---")
+        st.subheader(f"比較注記: 別の開始候補 {other['start']} が単一ルートでより高い平均乗数/移動を出しました")
+        st.markdown(f"- {other['start']} の単一ルート最大: **{other['max_route_avg']:.2f}**, 代表の全体重み付け平均: **{rep['overall_avg']:.2f}**")
+        # show that best route
+        other_res = other['result']
+        candidate_routes = other_res.get('routes', [])
+        if candidate_routes:
+            best_route = max(candidate_routes, key=lambda rr: rr.get('avg_mul', 0.0))
+            st.markdown(f"### {other['start']} の最高ルート: {' → '.join(best_route['route'])}")
+            st.markdown(f"- カバー港数: {len(best_route['covered'])}  平均乗数/移動: {best_route['avg_mul']:.2f}  総乗数: {best_route['total_mul']:.2f}")
+            with st.expander("ステップ詳細（比較用）"):
+                for sidx, s in enumerate(best_route['steps'], start=1):
+                    bought = f"{s.get('chosen_item')}" if s.get('chosen_item') else "-"
+                    st.write(f"{sidx}. {s['from']} → {s['to']} : 購入 {bought} , 乗数 {s['multiplier']:.2f}")
 
 st.success("自動解析完了")
