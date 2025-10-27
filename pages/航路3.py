@@ -391,21 +391,6 @@ except Exception as e:
 CASH_DEFAULT = 50000
 mapping_preview, candidates_preview = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, CASH_DEFAULT)
 
-st.subheader("各港から一手で最適な行き先（乗数・買う物）")
-rows = []
-for p in ports:
-    outs = mapping_preview.get(p, {})
-    if not outs:
-        rows.append({"出発港": p, "最適到着": "-", "乗数": "-", "買う物": "-"})
-        continue
-    best_q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
-    items_summary = f"{info.get('chosen_item') or '-'}"
-    multiplier = info.get('multiplier', 1.0)
-    rows.append({"出発港": p, "最適到着": best_q, "乗数": f"{multiplier:.2f}", "買う物": items_summary})
-
-df_preview = pd.DataFrame(rows)
-st.dataframe(df_preview, height=320)
-
 # レイアウト（既存の UI を維持）
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -606,7 +591,22 @@ with col3:
 # AUTO_TOP_K を固定で5
 # --------------------
 st.markdown("---")
-st.header("自動解析（上位5開始候補から比較）")
+st.subheader("各港から一手で最適な行き先（乗数・買う物）")
+rows = []
+for p in ports:
+    outs = mapping_preview.get(p, {})
+    if not outs:
+        rows.append({"出発港": p, "最適到着": "-", "乗数": "-", "買う物": "-"})
+        continue
+    best_q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
+    items_summary = f"{info.get('chosen_item') or '-'}"
+    multiplier = info.get('multiplier', 1.0)
+    rows.append({"出発港": p, "最適到着": best_q, "乗数": f"{multiplier:.2f}", "買う物": items_summary})
+
+df_preview = pd.DataFrame(rows)
+st.dataframe(df_preview, height=320)
+st.markdown("---")
+st.header("ルート解析")
 
 AUTO_TOP_K = 5
 CASH_DEFAULT = 50000
