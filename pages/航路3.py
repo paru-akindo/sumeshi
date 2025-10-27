@@ -3,13 +3,12 @@ import streamlit as st
 from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import numpy as np
-import re
 import requests
 from io import StringIO
 from copy import deepcopy
 from math import prod
 
-st.set_page_config(page_title="航路買い物（貪欲閉路群）", layout="wide")
+st.set_page_config(page_title="航路買い物（貪欲閉路群 再計算版）", layout="wide")
 
 # --------------------
 # 設定: ITEMS はスプレッドシートの品目列ヘッダと一致させること
@@ -129,31 +128,31 @@ def greedy_plan_for_destination_general(current_port: str, dest_port: str, cash:
     return plan, int(total_cost), int(total_profit), int(remaining_cash_after_sell)
 
 # --------------------
-# 単一遷移乗数計算
+# subset版: from_ports -> to_ports のみ計算する効率的関数
 # --------------------
-def compute_single_step_multipliers(price_matrix: Dict[str,Dict[str,int]], ports: List[str], cash: int):
+def compute_single_step_multipliers_subset(price_matrix: Dict[str,Dict[str,int]], from_ports: List[str], to_ports: List[str], cash: int):
     """
-    全ての (p -> q) に対して stock=None で greedy を呼び、
-    乗数 cash_after / cash_before を返す mapping と candidates list
+    from_ports から to_ports への単一遷移のみ計算する最適化版。
+    戻り値: mapping (dict), candidates (list sorted by multiplier)
+    mapping: mapping[p][q] = {'multiplier','profit','plan','cash_after'}
     """
     mapping = {}
     candidates = []
-    for p in ports:
-        for q in ports:
+    to_set = set(to_ports)
+    for p in from_ports:
+        mapping.setdefault(p, {})
+        for q in to_ports:
             if p == q:
                 continue
             plan, cost, profit, cash_after = greedy_plan_for_destination_general(p, q, cash, None, price_matrix)
-            if cash <= 0:
-                multiplier = 1.0
-            else:
-                multiplier = float(cash_after) / float(max(1, cash))
-            mapping.setdefault(p, {})[q] = {'multiplier': multiplier, 'profit': profit, 'plan': plan, 'cash_after': cash_after}
+            multiplier = float(cash_after) / float(max(1, cash))
+            mapping[p][q] = {'multiplier': multiplier, 'profit': profit, 'plan': plan, 'cash_after': cash_after}
             candidates.append((p, q, multiplier))
     candidates.sort(key=lambda x: x[2], reverse=True)
     return mapping, candidates
 
 # --------------------
-# 置き換え済み: build_greedy_cycles_from_start（allowed_ports を追加）
+# build_greedy_cycles_from_start（allowed_ports を追加）
 # --------------------
 def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, allowed_ports: Optional[set] = None):
     """
@@ -165,7 +164,6 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
     cur = start_port
     cur_cash = cash
     steps = []
-    visited_set = set()
 
     while True:
         next_candidates_all = mapping.get(cur, {})
@@ -198,70 +196,74 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
             return route, cycle_steps, final_cash, avg_mul, total_mul
 
         visited.append(q)
-        visited_set.add(q)
 
         # safety: break if route too long
-        if len(visited) > len(mapping):
+        if len(visited) > max(1, len(mapping)):
             break
 
     return None, None, None, None, None
 
 # --------------------
-# 置き換え済み: generate_routes_greedy_cover（remaining_ports を反映）
+# generate_routes_greedy_cover（確定後に remaining_ports で再計算）
 # --------------------
-def generate_routes_greedy_cover(ports: List[str], mapping: Dict, cash: int, top_k_start: int = 3):
+def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dict, cash: int, top_k_start: int = 3):
     """
     - top_k_start 個の開始候補それぞれについて試行
-    - 各試行は remaining_ports を管理し、確定ルートの港を削除して次を探す（重複除去）
-    - 戻り値: list of attempts with chosen routes and leftover ports
+    - 各試行は remaining_ports を管理し、確定ルートの港を削除して次を探す
+    - 各ループで remaining_ports に基づいて mapping を再計算する（正確な最適化のため）
     """
-    # flatten single-step bests to pick starting ports order
-    singles = []
-    for p in mapping:
-        for q, info in mapping[p].items():
-            singles.append((p, q, info['multiplier']))
-    singles.sort(key=lambda x: x[2], reverse=True)
+    results_per_start = []
 
-    # determine unique starting ports in order of best outgoing multiplier
+    # 初回 mapping (全港 -> 全港)
+    mapping_full, singles = compute_single_step_multipliers_subset(price_matrix, ports, ports, cash)
+
+    # flatten singles to get ordering of starting ports by best outgoing
+    singles_sorted = sorted(singles, key=lambda x: x[2], reverse=True)
     start_ports_order = []
-    for p, q, m in singles:
+    for p, q, m in singles_sorted:
         if p not in start_ports_order:
             start_ports_order.append(p)
 
-    results_per_start = []
     for initial_start_choice in start_ports_order[:top_k_start]:
         remaining_ports = set(ports)
+        # we'll treat the chosen start as available, but remove it from remaining_ports choice list so we don't pick it again arbitrarily
         if initial_start_choice in remaining_ports:
             remaining_ports.remove(initial_start_choice)
 
         routes = []
         current_start = initial_start_choice
 
+        # mapping to use in this iteration: recompute from remaining_ports ∪ {current_start} as both from/to
         while True:
-            allowed = set(remaining_ports) | {current_start}
-            route, steps, final_cash, avg_mul, total_mul = build_greedy_cycles_from_start(current_start, mapping, cash, allowed_ports=allowed)
+            # allowed set for transitions: remaining_ports plus current_start (we allow returning to start)
+            allowed_for_calc = set(remaining_ports) | {current_start}
+            # build mapping restricted to allowed ports (from_ports = allowed, to_ports = allowed)
+            mapping, _ = compute_single_step_multipliers_subset(price_matrix, list(allowed_for_calc), list(allowed_for_calc), cash)
+
+            # attempt to build a cycle starting from current_start with allowed set
+            route, steps, final_cash, avg_mul, total_mul = build_greedy_cycles_from_start(current_start, mapping, cash, allowed_ports=allowed_for_calc)
             if route is None:
                 break
 
             covered = set(route)
             routes.append({'route': route, 'steps': steps, 'final_cash': final_cash, 'avg_mul': avg_mul, 'total_mul': total_mul, 'covered': covered})
 
+            # remove covered ports from remaining_ports
             remaining_ports -= covered
 
             if not remaining_ports:
                 break
 
-            # choose next start as the remaining port with the highest outgoing multiplier
+            # choose next start from remaining_ports based on current mapping (we recompute mapping for remaining_ports)
+            mapping_remain, singles_remain = compute_single_step_multipliers_subset(price_matrix, list(remaining_ports), list(remaining_ports), cash)
+            # pick port with best outgoing multiplier among remaining_ports
             next_start = None
             best_m = -1.0
-            for p in remaining_ports:
-                outs = mapping.get(p, {})
+            for p in mapping_remain:
+                outs = mapping_remain.get(p, {})
                 if not outs:
                     continue
-                q_info_candidates = {q:info for q,info in outs.items() if q in remaining_ports or q == p}
-                if not q_info_candidates:
-                    continue
-                q, info = max(q_info_candidates.items(), key=lambda kv: kv[1]['multiplier'])
+                q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
                 if info['multiplier'] > best_m:
                     best_m = info['multiplier']
                     next_start = p
@@ -280,7 +282,7 @@ def generate_routes_greedy_cover(ports: List[str], mapping: Dict, cash: int, top
 # --------------------
 # UI: 単一遷移ベスト表を先に表示、解析はユーザがボタンで実行
 # --------------------
-st.title("貪欲閉路群探索（乗数ベース）")
+st.title("貪欲閉路群探索（再計算版）")
 
 try:
     ports, price_matrix = fetch_price_matrix_from_csv_auto(CSV_URL)
@@ -288,28 +290,26 @@ except Exception as e:
     st.error(f"CSV読み込み失敗: {e}")
     st.stop()
 
-# show single-step bests on load
+# show single-step bests on load (using default cash 50000)
 cash_default = 50000
-mapping_preview, candidates_preview = compute_single_step_multipliers(price_matrix, ports, cash_default)
+mapping_preview, candidates_preview = compute_single_step_multipliers_subset(price_matrix, ports, ports, cash_default)
 
 st.subheader("各港から一手で最適な行き先（在庫無限評価）")
-# Build a table: from, to, multiplier, profit, top items (from plan)
 rows = []
 for p in ports:
     outs = mapping_preview.get(p, {})
     if not outs:
+        rows.append({"出発港": p, "最適到着": "-", "乗数": "-", "想定利益": 0, "買う物(一部)": ""})
         continue
-    # find best q
     best_q, info = max(outs.items(), key=lambda kv: kv[1]['multiplier'])
     plan = info.get('plan', [])
-    # summarize plan items
-    items_summary = "; ".join([f"{item}×{qty}" for item, qty, buy, sell, up in plan][:4])  # show up to 4 items
+    items_summary = "; ".join([f"{item}×{qty}" for item, qty, buy, sell, up in plan][:4])
     rows.append({"出発港": p, "最適到着": best_q, "乗数": f"{info['multiplier']:.6f}", "想定利益": int(info['profit']), "買う物(一部)": items_summary})
 
 df_preview = pd.DataFrame(rows)
 st.dataframe(df_preview, height=320)
 
-st.markdown("上は仮所持金 50,000 を基準にした各港の単一遷移最適先と想定利益です。必要なら所持金を変更して再読み込みして下さい。")
+st.markdown("上は仮所持金 50,000 を基準にした各港の単一遷移最適先と想定利益です。必要なら解析用所持金を変更して再計算してください。")
 
 # Controls for analysis
 col1, col2 = st.columns([1,1])
@@ -328,10 +328,9 @@ with col2:
         df_all = pd.DataFrame(rows).set_index("品目")
         st.dataframe(df_all, height=480)
 
-if st.button("閉路群を生成（貪欲）"):
+if st.button("閉路群を生成（貪欲・再計算）"):
     with st.spinner("解析中..."):
-        mapping, candidates = compute_single_step_multipliers(price_matrix, ports, cash)
-        results = generate_routes_greedy_cover(ports, mapping, cash, top_k_start=int(top_k_start))
+        results = generate_routes_greedy_cover_with_recalc(ports, price_matrix, cash, top_k_start=int(top_k_start))
     # display
     for attempt in results:
         st.markdown(f"## 初期スタート候補: {attempt['initial_start']}")
@@ -340,7 +339,6 @@ if st.button("閉路群を生成（貪欲）"):
             continue
         for i, r in enumerate(attempt['routes'], start=1):
             st.markdown(f"### ルート {i}: {' → '.join(r['route'])}")
-            # total multiplier may be missing for older keys; use total_mul if present
             total_mul = r.get('total_mul', r['final_cash'] / float(max(1, cash)))
             st.markdown(f"- カバー港数: {len(r['covered'])}  最終資産乗数: {total_mul:.6f}  平均乗数/移動: {r['avg_mul']:.6f}")
             with st.expander("ステップ詳細"):
