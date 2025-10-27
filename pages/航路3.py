@@ -218,13 +218,14 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
     return None, None, None, None, None
 
 # --------------------
-# generate_routes_greedy_cover_with_recalc（確定後に remaining_ports で再計算）
+# generate_routes_greedy_cover_with_recalc（初期 start を除外しない版）
 # --------------------
 def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dict, cash: int, top_k_start: int = 3):
     """
     - top_k_start 個の開始候補それぞれについて試行
     - 各試行は remaining_ports を管理し、確定ルートの港を削除して次を探す
     - 各ループで remaining_ports に基づいて mapping を再計算する
+    挙動変更: 初期 start を最初に remaining_ports から除外しない（start を残しておく）
     """
     results_per_start = []
 
@@ -238,8 +239,7 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
 
     for initial_start_choice in start_ports_order[:top_k_start]:
         remaining_ports = set(ports)
-        if initial_start_choice in remaining_ports:
-            remaining_ports.remove(initial_start_choice)
+        # DO NOT remove initial_start_choice from remaining_ports here.
 
         routes = []
         current_start = initial_start_choice
@@ -255,11 +255,13 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
             covered = set(route)
             routes.append({'route': route, 'steps': steps, 'avg_mul': avg_mul, 'total_mul': total_mul, 'covered': covered})
 
+            # remove covered ports from remaining_ports if they are present
             remaining_ports -= covered
 
             if not remaining_ports:
                 break
 
+            # recompute mapping among remaining ports to pick next start
             mapping_remain, singles_remain = compute_single_step_multipliers_oneitem(price_matrix, list(remaining_ports), list(remaining_ports), cash)
             next_start = None
             best_m = -1.0
