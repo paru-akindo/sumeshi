@@ -6,7 +6,7 @@ import requests
 from io import StringIO
 from math import prod
 
-st.set_page_config(page_title="航路買い物（単一品目近似・再計算版）", layout="wide")
+st.set_page_config(page_title="航路買い物（単一品目近似・再計算版・自動実行）", layout="wide")
 
 # --------------------
 # 設定: ITEMS はスプレッドシートの品目列ヘッダと一致させること
@@ -89,10 +89,6 @@ def fetch_price_matrix_from_csv_auto(url: str):
 # 単一品目仮定の簡易 greedy（利益率最大の単一品目を選ぶ）
 # --------------------
 def greedy_one_item_for_destination(current_port: str, dest_port: str, cash: int, price_matrix: Dict[str,Dict[str,int]]):
-    """
-    current_port で買い、dest_port で売る場合に利益率が最大の単一品目を選ぶ近似。
-    戻り値: chosen_item or None, buy_price, sell_price, qty_bought, step_profit, cash_after
-    """
     cash = int(max(1, cash))
     best_item = None
     best_rate = -1.0
@@ -129,10 +125,6 @@ def greedy_one_item_for_destination(current_port: str, dest_port: str, cash: int
 # compute_single_step_multipliers_oneitem
 # --------------------
 def compute_single_step_multipliers_oneitem(price_matrix: Dict[str,Dict[str,int]], from_ports: List[str], to_ports: List[str], cash: int):
-    """
-    各 (p->q) を greedy_one_item_for_destination で評価し、乗数だけを返す。
-    mapping[p][q] = {'multiplier','chosen_item','cash_after'}
-    """
     mapping = {}
     candidates = []
     for p in from_ports:
@@ -155,12 +147,7 @@ def compute_single_step_multipliers_oneitem(price_matrix: Dict[str,Dict[str,int]
 # build_greedy_cycles_from_start（route_nodes ベースで整合を保つ）
 # --------------------
 def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, allowed_ports: Optional[set] = None):
-    """
-    start_port から貪欲に最良遷移（最大乗数）を選んで辿り、閉路になったらそのルートを返す。
-    route_nodes を使って steps と常に整合させる。
-    戻り値: route (list), steps (list of dicts), final_cash, avg_multiplier_per_move, total_multiplier
-    """
-    route_nodes = [start_port]   # ノード列（最初に start を入れる）
+    route_nodes = [start_port]
     steps = []
 
     while True:
@@ -174,10 +161,8 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
         if not next_candidates:
             break
 
-        # choose best next
         q, info = max(next_candidates.items(), key=lambda kv: kv[1]['multiplier'])
 
-        # append step and node
         steps.append({
             'from': cur,
             'to': q,
@@ -186,22 +171,18 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
         })
         route_nodes.append(q)
 
-        # detect cycle: if q already in route_nodes before last appended, close cycle
         first_idx = None
         for idx, node in enumerate(route_nodes[:-1]):
             if node == q:
                 first_idx = idx
                 break
         if first_idx is not None:
-            # cycle nodes: route_nodes[first_idx:]  (includes repeated q at end)
             route = route_nodes[first_idx:]
-            # cycle steps are last len(route)-1 transitions
             cycle_len = len(route) - 1
             cycle_steps = steps[-cycle_len:] if cycle_len > 0 else []
             multipliers = [s['multiplier'] for s in cycle_steps]
             total_mul = prod(multipliers) if multipliers else 1.0
             avg_mul = total_mul ** (1.0 / len(multipliers)) if multipliers else 1.0
-            # final_cash: best-effort obtain last step cash_after if mapping contains it
             last_step_cash = None
             if cycle_steps:
                 last_from = cycle_steps[-1]['from']
@@ -211,25 +192,15 @@ def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, al
             final_cash = int(last_step_cash) if last_step_cash is not None else None
             return route, cycle_steps, final_cash, avg_mul, total_mul
 
-        # safety: prevent infinite loops
         if len(route_nodes) > max(1, len(mapping) + 5):
             break
 
     return None, None, None, None, None
 
 # --------------------
-# generate_routes_greedy_cover_with_recalc（確定後に remaining_ports で再計算）
-# 変更点: 初期 start を最初に remaining_ports から除外しない。
-# 次の start を選んでも current_start を自動削除しない（covered のみによる削除）
+# generate_routes_greedy_cover_with_recalc（初期 start を残す挙動）
 # --------------------
-def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dict, cash: int, top_k_start: int = 3):
-    """
-    - top_k_start 個の開始候補それぞれについて試行
-    - 各試行は remaining_ports を管理し、確定ルートの港を削除して次を探す
-    - 各ループで remaining_ports に基づいて mapping を再計算する
-    挙動変更: 初期 start を最初に remaining_ports から除外しない（start を残しておく）
-                 次の start を選んでも current_start は自動で削除しない（covered に含まれる時のみ削除される）
-    """
+def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dict, cash: int, top_k_start: int = 1):
     results_per_start = []
 
     mapping_full, singles = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, cash)
@@ -240,15 +211,13 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
         if p not in start_ports_order:
             start_ports_order.append(p)
 
+    # limit starts to top_k_start
     for initial_start_choice in start_ports_order[:top_k_start]:
         remaining_ports = set(ports)
-        # DO NOT remove initial_start_choice from remaining_ports here.
-
         routes = []
         current_start = initial_start_choice
 
         while True:
-            # allowed set for calculation includes remaining ports plus current start
             allowed_for_calc = set(remaining_ports) | {current_start}
             mapping, _ = compute_single_step_multipliers_oneitem(price_matrix, list(allowed_for_calc), list(allowed_for_calc), cash)
 
@@ -259,13 +228,12 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
             covered = set(route)
             routes.append({'route': route, 'steps': steps, 'avg_mul': avg_mul, 'total_mul': total_mul, 'covered': covered})
 
-            # remove covered ports from remaining_ports if present
+            # remove covered ports only
             remaining_ports -= covered
 
             if not remaining_ports:
                 break
 
-            # recompute mapping among remaining_ports to pick next start
             mapping_remain, singles_remain = compute_single_step_multipliers_oneitem(price_matrix, list(remaining_ports), list(remaining_ports), cash)
             next_start = None
             best_m = -1.0
@@ -282,16 +250,16 @@ def generate_routes_greedy_cover_with_recalc(ports: List[str], price_matrix: Dic
                 break
 
             current_start = next_start
-            # DO NOT remove current_start here; removal only happens via covered subtraction above
+            # do NOT remove current_start here; only remove via covered subtraction
 
         results_per_start.append({'initial_start': initial_start_choice, 'routes': routes, 'remaining_ports': remaining_ports})
 
     return results_per_start
 
 # --------------------
-# UI
+# UI（開始候補上位kは固定、ページロードで自動実行）
 # --------------------
-st.title("貪欲閉路群探索（単一品目近似・再計算版）")
+st.title("貪欲閉路群探索（単一品目近似・再計算版・自動実行）")
 
 try:
     ports, price_matrix = fetch_price_matrix_from_csv_auto(CSV_URL)
@@ -299,10 +267,10 @@ except Exception as e:
     st.error(f"CSV読み込み失敗: {e}")
     st.stop()
 
-# 固定の解析用所持金（入力欄は表示しない、内部でこの値を使う）
 CASH_DEFAULT = 50000
+TOP_K_START_FIXED = 1
 
-# show single-step bests on load (using fixed cash)
+# 自動で単一遷移表を作成して表示
 mapping_preview, candidates_preview = compute_single_step_multipliers_oneitem(price_matrix, ports, ports, CASH_DEFAULT)
 
 st.subheader("各港から一手で最適な行き先（在庫無限・単一品目仮定）")
@@ -320,37 +288,24 @@ for p in ports:
 df_preview = pd.DataFrame(rows)
 st.dataframe(df_preview, height=320)
 
-st.markdown("上は所持金を内部固定（50,000）にして算出した各港の単一遷移最適先です。表示は乗数を小数点2桁で丸めています。")
+st.markdown("開始候補上位kを1に固定し、ページロード時に解析を自動実行します。")
 
-col1, col2 = st.columns([1,1])
-with col1:
-    top_k_start = st.number_input("開始候補として試す上位k", min_value=1, max_value=10, value=1)
-with col2:
-    st.write(f"検出対象港数: {len(ports)}")
-    if st.checkbox("価格表を表示"):
-        rows_price = []
-        for name, _ in ITEMS:
-            row = {"品目": name}
-            for p in ports:
-                row[p] = price_matrix[name].get(p, 0)
-            rows_price.append(row)
-        df_all = pd.DataFrame(rows_price).set_index("品目")
-        st.dataframe(df_all, height=480)
+# 自動解析（ページロード時に実行）
+with st.spinner("自動解析中..."):
+    results = generate_routes_greedy_cover_with_recalc(ports, price_matrix, CASH_DEFAULT, top_k_start=TOP_K_START_FIXED)
 
-if st.button("閉路群を生成（貪欲・再計算）"):
-    with st.spinner("解析中..."):
-        results = generate_routes_greedy_cover_with_recalc(ports, price_matrix, CASH_DEFAULT, top_k_start=int(top_k_start))
-    for attempt in results:
-        st.markdown(f"## 初期スタート候補: {attempt['initial_start']}")
-        if not attempt['routes']:
-            st.write("ルートが生成できませんでした。")
-            continue
-        for i, r in enumerate(attempt['routes'], start=1):
-            st.markdown(f"### ルート {i}: {' → '.join(r['route'])}")
-            total_mul = r.get('total_mul', r.get('total_mul', r['avg_mul']))
-            st.markdown(f"- カバー港数: {len(r['covered'])}  総乗数: {total_mul:.2f}  平均乗数/移動: {r['avg_mul']:.2f}")
-            with st.expander("ステップ詳細"):
-                for sidx, s in enumerate(r['steps'], start=1):
-                    bought = f"{s.get('chosen_item')}" if s.get('chosen_item') else "-"
-                    st.write(f"{sidx}. {s['from']} → {s['to']} : 購入 {bought} , 乗数 {s['multiplier']:.2f}")
-    st.success("完了")
+for attempt in results:
+    st.markdown(f"## 初期スタート候補: {attempt['initial_start']}")
+    if not attempt['routes']:
+        st.write("ルートが生成できませんでした。")
+        continue
+    for i, r in enumerate(attempt['routes'], start=1):
+        st.markdown(f"### ルート {i}: {' → '.join(r['route'])}")
+        total_mul = r.get('total_mul', r.get('total_mul', r['avg_mul']))
+        st.markdown(f"- カバー港数: {len(r['covered'])}  総乗数: {total_mul:.2f}  平均乗数/移動: {r['avg_mul']:.2f}")
+        with st.expander("ステップ詳細"):
+            for sidx, s in enumerate(r['steps'], start=1):
+                bought = f"{s.get('chosen_item')}" if s.get('chosen_item') else "-"
+                st.write(f"{sidx}. {s['from']} → {s['to']} : 購入 {bought} , 乗数 {s['multiplier']:.2f}")
+
+st.success("自動解析完了")
