@@ -9,7 +9,7 @@ from io import StringIO
 from copy import deepcopy
 from math import prod
 
-st.set_page_config(page_title="航路買い物（統合版・上位k比較表示・重み付け平均）", layout="wide")
+st.set_page_config(page_title="航路買い物（統合版・重み付け平均）", layout="wide")
 
 # --------------------
 # 設定: ITEMS はスプレッドシートの品目列ヘッダと一致させること
@@ -582,12 +582,12 @@ with col3:
 # --------------------
 # 自動解析（上位kから検討）: 要求に基づくロジックを実装
 # overall_avg を「ルートの移動回数で重み付けた平均」に変更
+# AUTO_TOP_K を固定で5
 # --------------------
 st.markdown("---")
-st.header("自動解析（上位k開始候補から比較）")
+st.header("自動解析（上位5開始候補から比較）")
 
-# パラメータ: 何位までの開始候補を試すか（UIで調整可能）
-AUTO_TOP_K = st.number_input("自動解析で試す開始候補の上位k", min_value=1, max_value=min(10, max(1, len(ports)-1)), value=5, step=1)
+AUTO_TOP_K = 5
 CASH_DEFAULT = 50000
 
 # 単一遷移プレビュー（内部計算）
@@ -616,7 +616,6 @@ with st.spinner("自動解析（複数開始候補）実行中..."):
             overall_avg = 0.0
             max_route_avg = 0.0
         else:
-            # compute weighted average: weight = number of moves in route = len(route)-1
             weighted_sum = 0.0
             total_moves = 0
             avg_list = []
@@ -637,26 +636,17 @@ with st.spinner("自動解析（複数開始候補）実行中..."):
             'result': res
         })
 
-    # Determine the start with best overall_avg and the start that has the best single route avg
     start_best_overall = max(start_metrics, key=lambda x: x['overall_avg']) if start_metrics else None
     start_best_single_route = max(start_metrics, key=lambda x: x['max_route_avg']) if start_metrics else None
 
-    # Choose representative to display: use start_best_overall
     rep = start_best_overall
     other = start_best_single_route
 
-# Display summary and representative result
+# Display representative result only; do not show the removed summary lines
 if not start_metrics:
     st.info("自動解析で開始候補が見つかりませんでした。")
 else:
-    st.subheader("比較結果サマリ")
-    st.markdown(f"- 試行した開始候補: **{', '.join([s for s in start_ports_try])}**")
-    st.markdown(f"- 代表として表示する開始候補（ルート移動回数で重み付けた平均乗数/移動が最大）: **{rep['start']}**  平均乗数/移動（重み付け）: **{rep['overall_avg']:.2f}**")
-    st.markdown(f"- 検討中で単一ルートの最大平均乗数/移動が最大だった開始候補: **{other['start']}**  単一ルート最大: **{other['max_route_avg']:.2f}**")
-    if rep['start'] == other['start']:
-        st.markdown("- 代表と単一ルート最大は同一の開始候補です（同じ結果）。")
-
-    st.markdown("---")
+    # Representative display
     st.subheader(f"代表表示: 開始候補 {rep['start']} のルート群と指標")
     res = rep['result']
     routes = res.get('routes', [])
@@ -677,7 +667,6 @@ else:
         st.markdown("---")
         st.subheader(f"比較注記: 別の開始候補 {other['start']} が単一ルートでより高い平均乗数/移動を出しました")
         st.markdown(f"- {other['start']} の単一ルート最大: **{other['max_route_avg']:.2f}**, 代表の全体重み付け平均: **{rep['overall_avg']:.2f}**")
-        # show that best route
         other_res = other['result']
         candidate_routes = other_res.get('routes', [])
         if candidate_routes:
