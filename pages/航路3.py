@@ -15,7 +15,7 @@ ITEMS = [
     ("鳳梨",100),("魚肉",100),("酒",100),("水稲",100),("木材",100),("ヤシ",100),
     ("海鮮",200),("絹糸",200),("水晶",200),("茶葉",200),("鉄鉱",200),
     ("香料",300),("玉器",300),("白銀",300),("皮革",300),
-    ("真珠",500),("燕の巣",500),("陶器",500),
+    ("真珠",500),("燕の巣",500),("陶器",200),
     ("象牙",1000),("鹿茸",1000)
 ]
 
@@ -152,52 +152,67 @@ def compute_single_step_multipliers_oneitem(price_matrix: Dict[str,Dict[str,int]
     return mapping, candidates
 
 # --------------------
-# build_greedy_cycles_from_start（allowed_ports を追加）
+# build_greedy_cycles_from_start（route_nodes ベースで整合を保つ）
 # --------------------
 def build_greedy_cycles_from_start(start_port: str, mapping: Dict, cash: int, allowed_ports: Optional[set] = None):
     """
     start_port から貪欲に最良遷移（最大乗数）を選んで辿り、閉路になったらそのルートを返す。
-    allowed_ports が指定されていれば、その集合に含まれる港のみを遷移候補にする。
+    route_nodes を使って steps と常に整合させる。
     戻り値: route (list), steps (list of dicts), final_cash, avg_multiplier_per_move, total_multiplier
     """
-    visited = []
-    cur = start_port
+    route_nodes = [start_port]   # ノード列（最初に start を入れる）
     steps = []
 
     while True:
+        cur = route_nodes[-1]
         next_candidates_all = mapping.get(cur, {})
         if allowed_ports is not None:
-            next_candidates = {q: info for q, info in next_candidates_all.items() if q in allowed_ports or q == start_port}
+            next_candidates = {q:info for q, info in next_candidates_all.items() if q in allowed_ports or q == start_port}
         else:
             next_candidates = next_candidates_all
 
         if not next_candidates:
             break
 
+        # choose best next
         q, info = max(next_candidates.items(), key=lambda kv: kv[1]['multiplier'])
 
+        # append step and node
         steps.append({
             'from': cur,
             'to': q,
             'multiplier': info.get('multiplier'),
             'chosen_item': info.get('chosen_item'),
         })
-        cur = q
+        route_nodes.append(q)
 
-        if q in visited:
-            idx = visited.index(q)
-            route_segment = visited[idx:] + [q]
-            route = [start_port] + route_segment
-            cycle_steps = steps[-len(route_segment):] if route_segment else []
+        # detect cycle: if q already in route_nodes before last appended, close cycle
+        first_idx = None
+        for idx, node in enumerate(route_nodes[:-1]):
+            if node == q:
+                first_idx = idx
+                break
+        if first_idx is not None:
+            # cycle nodes: route_nodes[first_idx:]  (includes repeated q at end)
+            route = route_nodes[first_idx:]
+            # cycle steps are last len(route)-1 transitions
+            cycle_len = len(route) - 1
+            cycle_steps = steps[-cycle_len:] if cycle_len > 0 else []
             multipliers = [s['multiplier'] for s in cycle_steps]
             total_mul = prod(multipliers) if multipliers else 1.0
             avg_mul = total_mul ** (1.0 / len(multipliers)) if multipliers else 1.0
-            final_cash = None
+            # final_cash: best-effort obtain last step cash_after if mapping contains it
+            last_step_cash = None
+            if cycle_steps:
+                last_from = cycle_steps[-1]['from']
+                last_to = cycle_steps[-1]['to']
+                info_last = mapping.get(last_from, {}).get(last_to, {})
+                last_step_cash = info_last.get('cash_after')
+            final_cash = int(last_step_cash) if last_step_cash is not None else None
             return route, cycle_steps, final_cash, avg_mul, total_mul
 
-        visited.append(q)
-
-        if len(visited) > max(1, len(mapping)):
+        # safety: prevent infinite loops
+        if len(route_nodes) > max(1, len(mapping) + 5):
             break
 
     return None, None, None, None, None
