@@ -3,13 +3,18 @@
 水準評価モード専用アプリケーション
 - 部品レベル入力を 2行×7列 のプルダウンで行う
 - 各サイクルで得られる reward_table の報酬名別確率分布を表で表示
+- 次に上げたい部品と現在の玉龍幣残高を評価前に入力できるようにした
+  （評価実行ボタンを押すと、評価結果と到達予定時刻・残り時間・アップ後期待値を表示）
+- 到達予定時刻は日本時間（JST）で表示します
 """
 
 import streamlit as st
 import pandas as pd
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
+from datetime import datetime, timedelta, timezone
+import math
 
 # === 定数・テーブル定義 ===
 
@@ -43,12 +48,13 @@ upgrade_info = {
         {"level": 3, "time": 7.5, "cost": 44650},
     ],
     "教室_A": [
-        {"level": 1, "time": 60, "cost": 0},
-        {"level": 2, "time": 30, "cost": 6900},
-        {"level": 3, "time": 20, "cost": 11500},
-        {"level": 4, "time": 15, "cost": 23000},
-        {"level": 5, "time": 12, "cost": 31850},
-        {"level": 6, "time": 10, "cost": 58800},
+        {"level": 1, "cost": 0},
+        {"level": 2, "cost": 1000},
+        {"level": 3, "cost": 8250},
+        {"level": 4, "cost": 14700},
+        {"level": 5, "cost": 19900},
+        {"level": 6, "cost": 27600},
+        {"level": 7, "cost": 40000},
     ],
     "教室_B": [
         {"level": 1, "time": 60, "cost": 0},
@@ -162,11 +168,11 @@ def merge_pmfs(pmfs: List[Dict[int, float]]) -> Dict[int, float]:
 _expected_cache: Dict[Tuple[int, Tuple[int, ...]], float] = {}
 
 def get_classroom_hist(levels: Dict[str, int]) -> Tuple[int, ...]:
-    counts = {i: 0 for i in range(1, 7)}
+    counts = {i: 0 for i in range(1, 8)}
     for i in range(1, 6):
         lvl = levels.get(f"教室_A{i}", 1)
         counts[lvl] += 1
-    return tuple(counts[i] for i in range(1, 7))
+    return tuple(counts[i] for i in range(1, 8))
 
 def combine_classroom_distribution(hist: Tuple[int, ...]) -> Dict[int, float]:
     pmfs = []
@@ -197,23 +203,23 @@ def expected_cycle_reward_compressed(
 def compute_cycle_time(levels: Dict[str, int]) -> int:
     times: List[float] = []
     for part in ["受付_A", "受付_B", "計測_B"]:
-        t = next((it["time"] for it in upgrade_info[part]
+        t = next((it.get("time") for it in upgrade_info[part]
                   if it["level"] == levels.get(part, 1)), None)
         if t is not None:
             times.append(t)
     for i in range(1, 6):
-        t = next((it["time"] for it in upgrade_info["教室_B"]
+        t = next((it.get("time") for it in upgrade_info["教室_B"]
                   if it["level"] == levels.get(f"教室_B{i}", 1)), None)
         if t is not None:
             times.append(t)
     return int(max(times)) if times else 60
 
 def get_coin_rate(levels: Dict[str, int], risk: float) -> float:
-    gym_lv = levels["計測_A"]
+    gym_lv = levels.get("計測_A", 1)
     hist = get_classroom_hist(levels)
     reward = expected_cycle_reward_compressed(gym_lv, hist)
     cycle_time = compute_cycle_time(levels)
-    return reward * risk / cycle_time
+    return reward * risk / cycle_time if cycle_time > 0 else 0.0
 
 def total_level(levels: Dict[str, int]) -> int:
     keys = (
@@ -245,9 +251,9 @@ def evaluate(params: EvaluationParams) -> EvaluationResult:
     lv = params.levels
     rf = params.risk_factor
     tot_lv = total_level(lv)
-    cy_rew = expected_cycle_reward_compressed(lv["計測_A"], get_classroom_hist(lv))
+    cy_rew = expected_cycle_reward_compressed(lv.get("計測_A", 1), get_classroom_hist(lv))
     cy_time = compute_cycle_time(lv)
-    coin_rt = cy_rew * rf / cy_time
+    coin_rt = cy_rew * rf / cy_time if cy_time > 0 else 0.0
     hourly_rt = coin_rt * 3600
     return EvaluationResult(
         total_level=tot_lv,
@@ -256,6 +262,35 @@ def evaluate(params: EvaluationParams) -> EvaluationResult:
         coin_rate=coin_rt,
         hourly_rate=hourly_rt,
     )
+
+# === レベルアップ試算用関数 ===
+
+def get_upgrade_cost(part: str, current_level: int) -> Optional[int]:
+    if part.startswith("教室_A"):
+        key = "教室_A"
+    elif part.startswith("教室_B"):
+        key = "教室_B"
+    else:
+        key = part
+    info = upgrade_info.get(key, [])
+    next_level = current_level + 1
+    return next((it.get("cost") for it in info if it.get("level") == next_level), None)
+
+def accumulate_minutes_ceiled(current_coins: int, needed_coins: int, coin_rate_per_sec: float) -> Optional[int]:
+    deficit = needed_coins - current_coins
+    if deficit <= 0:
+        return 0
+    if coin_rate_per_sec is None or coin_rate_per_sec <= 0:
+        return None
+    wait_seconds = deficit / coin_rate_per_sec
+    return math.ceil(wait_seconds / 60)
+
+# JST timezone
+JST = timezone(timedelta(hours=9))
+
+def arrival_time_from_minutes(minutes_ceiled: int) -> datetime:
+    # return timezone-aware datetime in JST
+    return datetime.now(timezone.utc).astimezone(JST) + timedelta(minutes=minutes_ceiled)
 
 # === Streamlit UI ===
 
@@ -275,44 +310,76 @@ def main():
 
     st.markdown("### レベル入力")
     with st.form("level_form"):
-        cols = st.columns(7)
-        # 列ヘッダー（表示用ラベル）
-        for col, lbl in zip(cols, col_labels):
+        # 列ヘッダー
+        header_cols = st.columns(7)
+        for col, lbl in zip(header_cols, col_labels):
             col.markdown(f"**{lbl}**")
 
         level_inputs: Dict[str, int] = {}
-        # セルごとにプルダウン
-        for rcode in row_codes:
-            for col, num in zip(cols, col_nums):
+        # 各行を別々に columns で作る（重なりを避けるため）
+        for rcode, rlabel in zip(row_codes, row_labels):
+            st.write(f"**{rlabel}**")
+            row_cols = st.columns(7)
+            for col, num in zip(row_cols, col_nums):
                 code = f"{num}{rcode}"
-                part = code_to_part[code]
-                # 内部テーブルキー選択
+                part = code_to_part.get(code)
+                if part is None:
+                    part = "教室_A1"
                 if part.startswith("教室_A"):
                     key = "教室_A"
                 elif part.startswith("教室_B"):
                     key = "教室_B"
                 else:
                     key = part
-                max_lv = max(it["level"] for it in upgrade_info[key])
-                # ← ラベルを空文字に & collapsed で非表示に
+                max_lv = max(it.get("level", 1) for it in upgrade_info[key])
                 lvl = col.selectbox(
-                    "",                          # ラベルを空に
+                    "",
                     options=list(range(1, max_lv+1)),
                     index=0,
-                    key=code,                    # internal key はそのまま
-                    label_visibility="collapsed" # ラベル非表示
+                    key=code,
+                    label_visibility="collapsed"
                 )
                 level_inputs[code] = lvl
 
-        submitted = st.form_submit_button("評価実行")
+        # ここで「次に上げたい部品」と「現在の玉龍幣残高」をフォーム内で入力できるようにする
+        # 表示ラベル（例: "受付_教師"）と内部キー（例: "受付_A"）を分離して扱う
+        row_label_map = {"a": "教師", "b": "席"}
+        display_map: Dict[str, str] = {}
+        part_options_internal: List[str] = []
 
+        # sorted(level_inputs.keys()) でコード順に並べる（"1a","1b","2a",...）
+        for code in sorted(level_inputs.keys()):
+            internal = code_to_part.get(code)
+            if internal is None:
+                continue
+            col_index = int(code[0]) - 1  # 0-based
+            col_label = col_labels[col_index]
+            row_code = code[1]
+            row_label = row_label_map.get(row_code, row_code)
+            display_label = f"{col_label}_{row_label}"  # 例: "受付_教師"
+            # 内部キーが既に追加されていなければ追加（教室_A1..A5 は個別に扱う）
+            if internal not in part_options_internal:
+                part_options_internal.append(internal)
+                display_map[internal] = display_label
+
+        # selectbox: options は内部キーのリスト、format_func で表示を差し替える
+        part_choice_internal = st.selectbox(
+            "次に上げたい部品",
+            options=part_options_internal,
+            index=0,
+            format_func=lambda x: display_map.get(x, x),
+            key="part_to_upgrade"
+        )
+        current_coins = st.number_input("現在の玉龍幣残高", min_value=0, value=0, step=100, key="current_coins")
+
+        submitted = st.form_submit_button("評価実行")
 
     if not submitted:
         return
 
     # 入力確認：2×7 テーブル表示
     data = [
-        [level_inputs[f"{num}{rcode}"] for num in col_nums]
+        [level_inputs.get(f"{num}{rcode}", 1) for num in col_nums]
         for rcode in row_codes
     ]
     df_input = pd.DataFrame(data, index=row_labels, columns=col_labels)
@@ -320,6 +387,7 @@ def main():
     st.table(df_input)
 
     # 評価実行
+    # lvl_dict のキーは部品名（例: "教室_A1"）になる
     lvl_dict = {code_to_part[c]: level_inputs[c] for c in level_inputs}
     result = evaluate(EvaluationParams(levels=lvl_dict, risk_factor=risk))
 
@@ -329,14 +397,46 @@ def main():
     st.write(f"- サイクルタイム: {result.cycle_time} 秒")
     st.write(f"- 1時間あたり玉龍幣期待値: {result.hourly_rate:.2f}")
 
-    # 報酬分布を表で表示（名前をインデックス）
+    # 報酬分布
     hist = get_classroom_hist(lvl_dict)
-    dist = reward_distribution(lvl_dict["計測_A"], hist)
+    dist = reward_distribution(lvl_dict.get("計測_A", 1), hist)
     names = [reward_names.get(c, str(c)) for c in dist.keys()]
     probs = [round(p*100, 2) for p in dist.values()]
     df_dist = pd.DataFrame({"確率(%)": probs}, index=names)
     st.markdown("## 料理人分布")
     st.table(df_dist)
+
+    # 次のレベルアップ試算（フォーム内で選択した値を使う）
+    st.markdown("## 次のレベルアップ試算")
+    part_to_upgrade = part_choice_internal
+    current_coins = int(current_coins)
+
+    cur_level = lvl_dict.get(part_to_upgrade, 1)
+    cost = get_upgrade_cost(part_to_upgrade, cur_level)
+
+    if cost is None:
+        st.info("この部品はこれ以上レベルアップできません。")
+    else:
+        st.write(f"- 次のレベルアップ必要玉龍幣: {cost}")
+        minutes_ceiled = accumulate_minutes_ceiled(current_coins, cost, result.coin_rate)
+        if minutes_ceiled is None:
+            st.warning("現在の獲得速度では到達予定時刻を計算できません（獲得速度が 0 の可能性）。")
+        else:
+            arrival_dt = arrival_time_from_minutes(minutes_ceiled)
+            # arrival_dt は JST の tz-aware datetime
+            st.write(f"- 到達予定時刻: {arrival_dt.strftime('%Y-%m-%d %H:%M')}")
+            remaining_hours = minutes_ceiled // 60
+            remaining_minutes = minutes_ceiled % 60
+            st.write(f"- 残り時間: {remaining_hours}時間{remaining_minutes}分")
+
+            # レベルアップ後の期待値（仮想的に +1 して再評価）
+            new_levels = lvl_dict.copy()
+            new_levels[part_to_upgrade] = cur_level + 1
+            new_result = evaluate(EvaluationParams(levels=new_levels, risk_factor=risk))
+            st.write(f"- レベルアップ後の1時間あたり玉龍幣期待値: {new_result.hourly_rate:.2f}")
+
+            diff = new_result.hourly_rate - result.hourly_rate
+            st.write(f"- 期待値の増加量（1時間あたり）: {diff:+.2f}")
 
 if __name__ == "__main__":
     main()
