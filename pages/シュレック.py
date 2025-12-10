@@ -1,11 +1,10 @@
 # main.py
 """
-水準評価モード専用アプリケーション
-- 部品レベル入力を 2行×7列 のプルダウンで行う
+水準評価モード専用アプリケーション（転置レイアウト）
+- 部品レベル入力を 7行×2列 のプルダウンで行う（各行は「カテゴリ」「教師」「席」）
 - 各サイクルで得られる reward_table の報酬名別確率分布を表で表示
-- 次に上げたい部品と現在の玉龍幣残高を評価前に入力できるようにした
-  （評価実行ボタンを押すと、評価結果と到達予定時刻・残り時間・アップ後期待値を表示）
-- 到達予定時刻は日本時間（JST）で表示します
+- 次に上げたい部品と現在の玉龍幣残高を評価前に入力できる（表示は 列_行）
+- 到達予定時刻は日本時間（JST）で表示
 """
 
 import streamlit as st
@@ -87,7 +86,6 @@ class_A_levels = {
     7: (97, 133),
 }
 
-# (合計ポイント low–high, 金貨)
 reward_table = [
     (0, 79, 2),
     (80, 139, 5),
@@ -100,7 +98,6 @@ reward_table = [
     (820, 1039, 50),
 ]
 
-# 金貨量 → 報酬名
 reward_names = {
     2:  "料理初心者",
     5:  "見習い料理人",
@@ -114,7 +111,6 @@ reward_names = {
     60: "厨神",
 }
 
-# コード → 部品名
 code_to_part = {
     "1a": "受付_A", "1b": "受付_B",
     "2a": "計測_A", "2b": "計測_B",
@@ -182,10 +178,7 @@ def combine_classroom_distribution(hist: Tuple[int, ...]) -> Dict[int, float]:
             pmfs.append(pmf_uniform(a, b, count))
     return merge_pmfs(pmfs) if pmfs else {0: 1.0}
 
-def expected_cycle_reward_compressed(
-    gym_level: int,
-    class_hist: Tuple[int, ...]
-) -> float:
+def expected_cycle_reward_compressed(gym_level: int, class_hist: Tuple[int, ...]) -> float:
     key = (gym_level, class_hist)
     if key in _expected_cache:
         return _expected_cache[key]
@@ -214,13 +207,6 @@ def compute_cycle_time(levels: Dict[str, int]) -> int:
             times.append(t)
     return int(max(times)) if times else 60
 
-def get_coin_rate(levels: Dict[str, int], risk: float) -> float:
-    gym_lv = levels.get("計測_A", 1)
-    hist = get_classroom_hist(levels)
-    reward = expected_cycle_reward_compressed(gym_lv, hist)
-    cycle_time = compute_cycle_time(levels)
-    return reward * risk / cycle_time if cycle_time > 0 else 0.0
-
 def total_level(levels: Dict[str, int]) -> int:
     keys = (
         ["受付_A", "受付_B", "計測_A", "計測_B"] +
@@ -229,12 +215,7 @@ def total_level(levels: Dict[str, int]) -> int:
     )
     return sum(levels.get(k, 1) for k in keys)
 
-# === 報酬分布計算 ===
-
-def reward_distribution(
-    gym_level: int,
-    class_hist: Tuple[int, ...]
-) -> Dict[int, float]:
+def reward_distribution(gym_level: int, class_hist: Tuple[int, ...]) -> Dict[int, float]:
     (gmin, gmax), p_double = gym_A_levels[gym_level]
     gym_pmf = {x: 1.0/(gmax-gmin+1) for x in range(gmin, gmax+1)}
     class_pmf = combine_classroom_distribution(class_hist)
@@ -244,8 +225,6 @@ def reward_distribution(
         coin = next((c for low, high, c in reward_table if low <= pts <= high), 0)
         dist[coin] += prob
     return dict(sorted(dist.items()))
-
-# === 評価関数 ===
 
 def evaluate(params: EvaluationParams) -> EvaluationResult:
     lv = params.levels
@@ -262,8 +241,6 @@ def evaluate(params: EvaluationParams) -> EvaluationResult:
         coin_rate=coin_rt,
         hourly_rate=hourly_rt,
     )
-
-# === レベルアップ試算用関数 ===
 
 def get_upgrade_cost(part: str, current_level: int) -> Optional[int]:
     if part.startswith("教室_A"):
@@ -289,7 +266,6 @@ def accumulate_minutes_ceiled(current_coins: int, needed_coins: int, coin_rate_p
 JST = timezone(timedelta(hours=9))
 
 def arrival_time_from_minutes(minutes_ceiled: int) -> datetime:
-    # return timezone-aware datetime in JST
     return datetime.now(timezone.utc).astimezone(JST) + timedelta(minutes=minutes_ceiled)
 
 # === Streamlit UI ===
@@ -297,72 +273,76 @@ def arrival_time_from_minutes(minutes_ceiled: int) -> datetime:
 def main():
     st.title("玉龍幣シミュ")
 
-    # リスク調整係数
-    risk = st.sidebar.number_input(
-        "リスク調整係数 (-r)", min_value=0.0, max_value=2.0, value=1.0, step=0.01
-    )
+    risk = st.sidebar.number_input("リスク調整係数 (-r)", min_value=0.0, max_value=2.0, value=1.0, step=0.01)
 
-    # 表示用行・列ラベル
-    row_labels  = ["教師", "席"]
-    row_codes   = ["a",   "b"]
-    col_labels  = ["受付","腕前審査","料理","包丁","製菓","調理","盛付"]
-    col_nums    = list(range(1, 8))
+    # 転置レイアウト用ラベル
+    col_labels = ["受付","腕前審査","料理","包丁","製菓","調理","盛付"]
+    row_label_map = {"a": "教師", "b": "席"}
 
     st.markdown("### レベル入力")
     with st.form("level_form"):
-        # 列ヘッダー
-        header_cols = st.columns(7)
-        for col, lbl in zip(header_cols, col_labels):
-            col.markdown(f"**{lbl}**")
-
         level_inputs: Dict[str, int] = {}
-        # 各行を別々に columns で作る（重なりを避けるため）
-        for rcode, rlabel in zip(row_codes, row_labels):
-            st.write(f"**{rlabel}**")
-            row_cols = st.columns(7)
-            for col, num in zip(row_cols, col_nums):
-                code = f"{num}{rcode}"
-                part = code_to_part.get(code)
-                if part is None:
-                    part = "教室_A1"
-                if part.startswith("教室_A"):
-                    key = "教室_A"
-                elif part.startswith("教室_B"):
-                    key = "教室_B"
-                else:
-                    key = part
-                max_lv = max(it.get("level", 1) for it in upgrade_info[key])
-                lvl = col.selectbox(
-                    "",
-                    options=list(range(1, max_lv+1)),
-                    index=0,
-                    key=code,
-                    label_visibility="collapsed"
-                )
-                level_inputs[code] = lvl
 
-        # ここで「次に上げたい部品」と「現在の玉龍幣残高」をフォーム内で入力できるようにする
-        # 表示ラベル（例: "受付_教師"）と内部キー（例: "受付_A"）を分離して扱う
-        row_label_map = {"a": "教師", "b": "席"}
+        # 各カテゴリごとに一行を作り、横に教師/席を並べる
+        for i, col_label in enumerate(col_labels, start=1):
+            # 3カラム：カテゴリ名（幅広め）・教師・席
+            c1, c2, c3 = st.columns([1.5, 1, 1])
+            # カテゴリ名を左に表示
+            c1.markdown(f"**{col_label}**")
+            # 教師（行コード 'a'）
+            code_a = f"{i}a"
+            part_a = code_to_part.get(code_a, "教室_A1")
+            if part_a.startswith("教室_A"):
+                key_a = "教室_A"
+            elif part_a.startswith("教室_B"):
+                key_a = "教室_B"
+            else:
+                key_a = part_a
+            max_lv_a = max(it.get("level", 1) for it in upgrade_info[key_a])
+            lvl_a = c2.selectbox(
+                f"{col_label}_教師",
+                options=list(range(1, max_lv_a+1)),
+                index=0,
+                key=code_a,
+                label_visibility="collapsed"
+            )
+            level_inputs[code_a] = lvl_a
+
+            # 席（行コード 'b'）
+            code_b = f"{i}b"
+            part_b = code_to_part.get(code_b, "教室_B1")
+            if part_b.startswith("教室_A"):
+                key_b = "教室_A"
+            elif part_b.startswith("教室_B"):
+                key_b = "教室_B"
+            else:
+                key_b = part_b
+            max_lv_b = max(it.get("level", 1) for it in upgrade_info[key_b])
+            lvl_b = c3.selectbox(
+                f"{col_label}_席",
+                options=list(range(1, max_lv_b+1)),
+                index=0,
+                key=code_b,
+                label_visibility="collapsed"
+            )
+            level_inputs[code_b] = lvl_b
+
+        # 次に上げたい部品と所持玉龍幣をフォーム内で指定（表示は 列_行）
         display_map: Dict[str, str] = {}
         part_options_internal: List[str] = []
-
-        # sorted(level_inputs.keys()) でコード順に並べる（"1a","1b","2a",...）
         for code in sorted(level_inputs.keys()):
             internal = code_to_part.get(code)
             if internal is None:
                 continue
-            col_index = int(code[0]) - 1  # 0-based
+            col_index = int(code[0]) - 1
             col_label = col_labels[col_index]
             row_code = code[1]
             row_label = row_label_map.get(row_code, row_code)
-            display_label = f"{col_label}_{row_label}"  # 例: "受付_教師"
-            # 内部キーが既に追加されていなければ追加（教室_A1..A5 は個別に扱う）
+            display_label = f"{col_label}_{row_label}"
             if internal not in part_options_internal:
                 part_options_internal.append(internal)
                 display_map[internal] = display_label
 
-        # selectbox: options は内部キーのリスト、format_func で表示を差し替える
         part_choice_internal = st.selectbox(
             "次に上げたい部品",
             options=part_options_internal,
@@ -377,17 +357,18 @@ def main():
     if not submitted:
         return
 
-    # 入力確認：2×7 テーブル表示
+    # 入力確認（転置なので表は元の 2x7 形式で表示）
+    col_nums = list(range(1, 8))
+    row_labels = ["教師", "席"]
     data = [
         [level_inputs.get(f"{num}{rcode}", 1) for num in col_nums]
-        for rcode in row_codes
+        for rcode in ["a", "b"]
     ]
     df_input = pd.DataFrame(data, index=row_labels, columns=col_labels)
     st.markdown("#### 入力内容")
     st.table(df_input)
 
     # 評価実行
-    # lvl_dict のキーは部品名（例: "教室_A1"）になる
     lvl_dict = {code_to_part[c]: level_inputs[c] for c in level_inputs}
     result = evaluate(EvaluationParams(levels=lvl_dict, risk_factor=risk))
 
@@ -397,7 +378,6 @@ def main():
     st.write(f"- サイクルタイム: {result.cycle_time} 秒")
     st.write(f"- 1時間あたり玉龍幣期待値: {result.hourly_rate:.2f}")
 
-    # 報酬分布
     hist = get_classroom_hist(lvl_dict)
     dist = reward_distribution(lvl_dict.get("計測_A", 1), hist)
     names = [reward_names.get(c, str(c)) for c in dist.keys()]
@@ -406,7 +386,7 @@ def main():
     st.markdown("## 料理人分布")
     st.table(df_dist)
 
-    # 次のレベルアップ試算（フォーム内で選択した値を使う）
+    # 次のレベルアップ試算
     st.markdown("## 次のレベルアップ試算")
     part_to_upgrade = part_choice_internal
     current_coins = int(current_coins)
@@ -423,18 +403,15 @@ def main():
             st.warning("現在の獲得速度では到達予定時刻を計算できません（獲得速度が 0 の可能性）。")
         else:
             arrival_dt = arrival_time_from_minutes(minutes_ceiled)
-            # arrival_dt は JST の tz-aware datetime
             st.write(f"- 到達予定時刻: {arrival_dt.strftime('%Y-%m-%d %H:%M')}")
             remaining_hours = minutes_ceiled // 60
             remaining_minutes = minutes_ceiled % 60
             st.write(f"- 残り時間: {remaining_hours}時間{remaining_minutes}分")
 
-            # レベルアップ後の期待値（仮想的に +1 して再評価）
             new_levels = lvl_dict.copy()
             new_levels[part_to_upgrade] = cur_level + 1
             new_result = evaluate(EvaluationParams(levels=new_levels, risk_factor=risk))
             st.write(f"- レベルアップ後の1時間あたり玉龍幣期待値: {new_result.hourly_rate:.2f}")
-
             diff = new_result.hourly_rate - result.hourly_rate
             st.write(f"- 期待値の増加量（1時間あたり）: {diff:+.2f}")
 
