@@ -119,6 +119,7 @@ def fetch_price_matrix_from_csv_auto(url: str):
     r.raise_for_status()
     s = r.content.decode("utf-8")
     df = pd.read_csv(StringIO(s))
+    df = df.iloc[:, :21]  # A列（品目名）＋ B〜U列（20港）だけに制限
 
     if df.shape[1] < 2:
         raise ValueError("スプレッドシートに品目列/港列が見つかりません。")
