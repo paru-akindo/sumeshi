@@ -121,7 +121,7 @@ def optimize_training(gosou_pt, kouzan_pt, shika_pt, N):
     top_item = [(f, i, convert_history(h)) for (f, i, h) in top_item]
     top_mix = [(f, i, convert_history(h)) for (f, i, h) in top_mix]
 
-    return top_feed, top_item, top_mix
+    return top_mix, top_feed, top_item
 
 
 # -----------------------------
@@ -135,8 +135,21 @@ shika = st.number_input("鹿追ポイント", min_value=0, value=0, step=1000)
 count = st.number_input("残り育成回数（最大10）", min_value=1, max_value=10, value=5)
 
 if st.button("最適化する"):
-    top_feed, top_item, top_mix = optimize_training(gosou, kouzan, shika, count)
+    top_mix, top_feed, top_item = optimize_training(gosou, kouzan, shika, count)
 
+    # -----------------------------
+    # 🔥 複合スコア（先頭）
+    # -----------------------------
+    st.subheader("🔥 複合スコア 最大パターン（餌 + アイテム×100）")
+    for feed, item, hist in top_mix:
+        st.write(f"**餌：{feed} / アイテム：{item}**")
+        with st.expander("選択履歴"):
+            for h in hist:
+                st.write(f"{h['event']} 第{h['stage']}段階（コスト:{h['cost']}） 餌:{h['feed']} アイテム:{h['item']}")
+
+    # -----------------------------
+    # 🍚 餌 最大
+    # -----------------------------
     st.subheader("🍚 餌 最大パターン")
     for feed, item, hist in top_feed:
         st.write(f"**餌：{feed} / アイテム：{item}**")
@@ -144,15 +157,11 @@ if st.button("最適化する"):
             for h in hist:
                 st.write(f"{h['event']} 第{h['stage']}段階（コスト:{h['cost']}） 餌:{h['feed']} アイテム:{h['item']}")
 
+    # -----------------------------
+    # 🎁 アイテム 最大
+    # -----------------------------
     st.subheader("🎁 アイテム 最大パターン")
     for feed, item, hist in top_item:
-        st.write(f"**餌：{feed} / アイテム：{item}**")
-        with st.expander("選択履歴"):
-            for h in hist:
-                st.write(f"{h['event']} 第{h['stage']}段階（コスト:{h['cost']}） 餌:{h['feed']} アイテム:{h['item']}")
-
-    st.subheader("🔥 複合スコア 最大パターン（餌 + アイテム×100）")
-    for feed, item, hist in top_mix:
         st.write(f"**餌：{feed} / アイテム：{item}**")
         with st.expander("選択履歴"):
             for h in hist:
