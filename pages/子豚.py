@@ -127,7 +127,7 @@ def optimize_training(gosou_pt, kouzan_pt, shika_pt, N):
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.title("🐷 豚育成 最適化ツール（Streamlit版）")
+st.title("🐷 豚育成 最適化ツール")
 
 gosou = st.number_input("護送ポイント", min_value=0, value=0, step=1000)
 kouzan = st.number_input("黄山の美ポイント", min_value=0, value=0, step=1)
