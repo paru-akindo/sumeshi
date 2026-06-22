@@ -3,7 +3,7 @@ from collections import defaultdict
 import heapq
 
 # ============================================================
-# 🔼 画面上部に表示されるイベント定義（ここを編集するだけでOK）
+# 🔼 イベント定義（UI には表示しない）
 # ============================================================
 EVENT_DATA = {
     "yakuyasan": {
@@ -122,17 +122,7 @@ def optimize_training(points, N):
 # ============================================================
 # Streamlit UI
 # ============================================================
-st.title("🐷 豚育成 最適化ツール（イベント定義つき）")
-
-# 🔼 イベント定義を画面上部に表示
-st.subheader("📘 イベント定義（ここを編集して使う）")
-
-for key, ev in EVENT_DATA.items():
-    st.markdown(f"### {ev['name']}")
-    st.write("コスト:", ev["costs"])
-    st.write("餌:", ev["feed"])
-    st.write("アイテム:", ev["item"])
-    st.markdown("---")
+st.title("🐷 豚育成 最適化ツール")
 
 # 入力フォーム
 points = {}
