@@ -3,24 +3,30 @@ from collections import defaultdict
 import heapq
 
 # ============================================================
-# 🔼 イベント定義（UI には表示しない）
+# 🔼 イベント定義（ここだけ差し替え）
 # ============================================================
 EVENT_DATA = {
-    "yakuyasan": {
-        "name": "薬屋",
-        "costs": [14300, 143000, 286000, 1144000],
+    "shousen": {
+        "name": "商戦",
+        "costs": [8170, 81625, 163250, 653000],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     },
-    "houshin": {
-        "name": "封神演義",
-        "costs": [3200, 49000, 98000, 392000],
+    "puzzle": {
+        "name": "海上パズル",
+        "costs": [550, 1175, 2350, 9400],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     },
-    "dotou": {
-        "name": "怒涛斬魁",
-        "costs": [7500, 23000, 46000, 184000],
+    "nankai": {
+        "name": "南海航路",
+        "costs": [1, 4, 7, 28],
+        "feed":  [20, 200, 400, 1600],
+        "item":  [1, 1, 2, 2]
+    },
+    "hana": {
+        "name": "花咲く春",
+        "costs": [210, 850, 1700, 6800],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     }
@@ -102,7 +108,6 @@ def optimize_training(points, N):
                         "history": new_hist
                     }
 
-    # 0〜N の全状態から最適解を取る
     results = []
     for i in range(N + 1):
         for st in dp[i].values():
@@ -120,11 +125,10 @@ def optimize_training(points, N):
 
 
 # ============================================================
-# Streamlit UI
+# Streamlit UI（イベント数に自動対応）
 # ============================================================
 st.title("🐷 豚育成 最適化ツール")
 
-# 入力フォーム
 points = {}
 for key, ev in EVENT_DATA.items():
     points[key] = st.number_input(
