@@ -2,30 +2,24 @@ import streamlit as st
 from collections import defaultdict
 
 # ============================================================
-# イベント定義
+# イベント定義（新セット・直書き）
 # ============================================================
 EVENT_DATA = {
-    "shousen": {
-        "name": "商戦",
-        "costs": [8170, 81625, 163250, 653000],
+    "geishun": {
+        "name": "街角迎春",
+        "costs": [18000, 62000, 124000, 496000],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     },
-    "puzzle": {
-        "name": "海上パズル",
-        "costs": [550, 1175, 2350, 9400],
+    "shinmitsu": {
+        "name": "親密",
+        "costs": [380, 3875, 7750, 31000],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     },
     "nankai": {
-        "name": "南海航路",
-        "costs": [1, 4, 7, 28],
-        "feed":  [20, 200, 400, 1600],
-        "item":  [1, 1, 2, 2]
-    },
-    "hana": {
-        "name": "花咲く春",
-        "costs": [210, 850, 1700, 6800],
+        "name": "摸金宝さがし",
+        "costs": [1100, 2650, 5300, 21200],
         "feed":  [20, 200, 400, 1600],
         "item":  [1, 1, 2, 2]
     }
@@ -74,7 +68,7 @@ def optimize_training(points, N):
     }
 
     # イベント順固定（高速化）
-    ordered_events = ["nankai", "puzzle", "hana", "shousen"]
+    ordered_events = ["shinmitsu", "nankai", "geishun"]
 
     ordered_options = []
     for ev in ordered_events:
@@ -96,14 +90,13 @@ def optimize_training(points, N):
                 new_rem = rem.copy()
                 new_rem[ev] -= cost
 
-                new_key = (
-                    new_rem["shousen"],
-                    new_rem["puzzle"],
-                    new_rem["nankai"],
-                    new_rem["hana"]
-                )
+                new_key = tuple(new_rem[k] for k in EVENT_KEYS)
 
-                new_state = (f_now + f_gain, it_now + it_gain, hist_now + [(ev, cost, f_gain, it_gain)])
+                new_state = (
+                    f_now + f_gain,
+                    it_now + it_gain,
+                    hist_now + [(ev, cost, f_gain, it_gain)]
+                )
 
                 if new_key not in next_dp:
                     next_dp[new_key] = new_state
