@@ -1,9 +1,8 @@
 import streamlit as st
 from collections import defaultdict
-import heapq
 
 # ============================================================
-# 🔼 イベント定義（ここだけ差し替え）
+# イベント定義
 # ============================================================
 EVENT_DATA = {
     "shousen": {
@@ -32,21 +31,20 @@ EVENT_DATA = {
     }
 }
 
+EVENT_KEYS = list(EVENT_DATA.keys())
+EVENT_JP = {k: v["name"] for k, v in EVENT_DATA.items()}
+
 # ============================================================
-# DP 用データ生成（自動）
+# DP 用オプション生成
 # ============================================================
-EVENT_JP = {}
 OPTIONS = []
 STAGE_MAP = {}
 
-for key, ev in EVENT_DATA.items():
-    EVENT_JP[key] = ev["name"]
-
-    for stage, cost in enumerate(ev["costs"], start=1):
-        feed = ev["feed"][stage - 1]
-        item = ev["item"][stage - 1]
-
-        OPTIONS.append((key, cost, feed, item))
+for ev, data in EVENT_DATA.items():
+    for stage, cost in enumerate(data["costs"], start=1):
+        feed = data["feed"][stage - 1]
+        item = data["item"][stage - 1]
+        OPTIONS.append((ev, cost, feed, item))
         STAGE_MAP[cost] = stage
 
 
@@ -67,67 +65,75 @@ def convert_history(history):
 
 
 # ============================================================
-# DP 本体（育成回数以内）
+# レベル3：完全一致 × 超高速DP（履歴復元つき）
 # ============================================================
 def optimize_training(points, N):
-    event_keys = list(EVENT_DATA.keys())
+    # 初期状態
+    dp = {
+        tuple(points[k] for k in EVENT_KEYS): (0, 0, [])
+    }
 
-    dp = [defaultdict(lambda: {"feed": -1, "item": -1, "history": []})
-          for _ in range(N + 1)]
+    # イベント順固定（高速化）
+    ordered_events = ["nankai", "puzzle", "hana", "shousen"]
 
-    start_key = tuple(points[k] for k in event_keys)
-    dp[0][start_key] = {"feed": 0, "item": 0, "history": []}
+    ordered_options = []
+    for ev in ordered_events:
+        data = EVENT_DATA[ev]
+        for stage, cost in enumerate(data["costs"], start=1):
+            ordered_options.append((ev, cost, data["feed"][stage-1], data["item"][stage-1]))
 
-    for i in range(N):
-        for state_key, state in dp[i].items():
-            feed_now = state["feed"]
-            item_now = state["item"]
-            hist_now = state["history"]
+    # DP 実行
+    for _ in range(N):
+        next_dp = {}
 
-            current_points = dict(zip(event_keys, state_key))
+        for key, (f_now, it_now, hist_now) in dp.items():
+            rem = dict(zip(EVENT_KEYS, key))
 
-            for ev, cost, feed_gain, item_gain in OPTIONS:
-                if cost > current_points[ev]:
+            for ev, cost, f_gain, it_gain in ordered_options:
+                if rem[ev] < cost:
                     continue
 
-                new_points = current_points.copy()
-                new_points[ev] -= cost
+                new_rem = rem.copy()
+                new_rem[ev] -= cost
 
-                new_key = tuple(new_points[k] for k in event_keys)
+                new_key = (
+                    new_rem["shousen"],
+                    new_rem["puzzle"],
+                    new_rem["nankai"],
+                    new_rem["hana"]
+                )
 
-                new_feed = feed_now + feed_gain
-                new_item = item_now + item_gain
-                new_hist = hist_now + [(ev, cost, feed_gain, item_gain)]
+                new_state = (f_now + f_gain, it_now + it_gain, hist_now + [(ev, cost, f_gain, it_gain)])
 
-                old = dp[i + 1][new_key]
+                if new_key not in next_dp:
+                    next_dp[new_key] = new_state
+                else:
+                    old = next_dp[new_key]
+                    if new_state[0] > old[0] or new_state[1] > old[1]:
+                        next_dp[new_key] = new_state
 
-                if new_feed > old["feed"] or new_item > old["item"]:
-                    dp[i + 1][new_key] = {
-                        "feed": new_feed,
-                        "item": new_item,
-                        "history": new_hist
-                    }
+        dp = next_dp
 
-    results = []
-    for i in range(N + 1):
-        for st in dp[i].values():
-            results.append((st["feed"], st["item"], st["history"]))
+    # 結果抽出
+    results = list(dp.values())
 
-    top_feed = heapq.nlargest(3, results, key=lambda x: x[0])
-    top_item = heapq.nlargest(3, results, key=lambda x: x[1])
-    top_mix = heapq.nlargest(3, results, key=lambda x: x[0] + x[1] * 100)
+    # 上位3つ
+    top_mix  = sorted(results, key=lambda x: x[0] + x[1] * 100, reverse=True)[:3]
+    top_feed = sorted(results, key=lambda x: (x[0], x[1]), reverse=True)[:3]
+    top_item = sorted(results, key=lambda x: (x[1], x[0]), reverse=True)[:3]
 
-    top_feed = [(f, i, convert_history(h)) for (f, i, h) in top_feed]
-    top_item = [(f, i, convert_history(h)) for (f, i, h) in top_item]
-    top_mix = [(f, i, convert_history(h)) for (f, i, h) in top_mix]
+    # 履歴を日本語化
+    top_mix  = [(f, it, convert_history(h)) for f, it, h in top_mix]
+    top_feed = [(f, it, convert_history(h)) for f, it, h in top_feed]
+    top_item = [(f, it, convert_history(h)) for f, it, h in top_item]
 
     return top_mix, top_feed, top_item
 
 
 # ============================================================
-# Streamlit UI（イベント数に自動対応）
+# Streamlit UI
 # ============================================================
-st.title("🐷 豚育成 最適化ツール")
+st.title("🐷 豚育成 最適化ツール（改良版・高速DP）")
 
 points = {}
 for key, ev in EVENT_DATA.items():
