@@ -10,8 +10,9 @@ from io import StringIO
 st.set_page_config(page_title="効率よく買い物しよう！", layout="wide")
 
 # --------------------
-# 定数: 品目・基礎値
+# 定数: 品目・基礎値・港はソース（スプレッドシート）と一致させること
 # --------------------
+# ITEMS の順序・名称はスプレッドシートの列ヘッダーと揃えてください（左端は港名列）
 ITEMS = [
     ("鳳梨",100),("魚肉",100),("酒",100),("水稲",100),("木材",100),("ヤシ",100),
     ("海鮮",200),("絹糸",200),("水晶",200),("茶葉",200),("鉄鉱",200),
@@ -21,14 +22,19 @@ ITEMS = [
 ]
 
 # --------------------
-# Google スプレッドシート（公開CSV）
+# Google スプレッドシート（公開CSV）設定
+# 使い方:
+#   {SPREADSHEET_ID} は URL の /d/.../ の部分
+#   {GID} は該当シートの gid パラメータ（通常最初のシートは 0）
+# CSV_URL の形式:
+#   https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID}
 # --------------------
 SPREADSHEET_ID = "1ft5FlwM5kaZK7B4vLQg2m1WYe5nWNb0udw5isFwDWy0"
 GID = "805544474"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID}"
 
 # --------------------
-# 厳格整数入力
+# ヘルパー: 厳格整数入力（空欄許容）
 # --------------------
 def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", allow_commas: bool = True, min_value: int = None, max_value: int = None):
     invalid_flag = f"{key}_invalid"
@@ -36,6 +42,7 @@ def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", a
         st.session_state[invalid_flag] = False
 
     raw = st.text_input(label, value="", placeholder=placeholder, key=key)
+
     s = (raw or "").strip()
     if s == "":
         st.session_state[invalid_flag] = False
@@ -44,7 +51,7 @@ def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", a
     if allow_commas:
         s = s.replace(",", "")
     s = s.translate(str.maketrans("０１２３４５６７８９－＋．，", "0123456789-+.,"))
-    if not re.fullmatch(r"[0-9]+", s):
+    if not re.fullmatch(r"\d+", s):
         st.error(f"「{label}」は整数の半角数字のみで入力してください。入力値: {raw}")
         st.session_state[invalid_flag] = True
         return None
@@ -69,7 +76,7 @@ def numeric_input_optional_strict(label: str, key: str, placeholder: str = "", a
     return val
 
 # --------------------
-# ★ 修正版 greedy（総利益ベースでソート）
+# 既存の最適化ロジック（そのまま）
 # --------------------
 def greedy_plan_for_destination(current_port: str, dest_port: str, cash: int, stock: Dict[str,int], price_matrix: Dict[str,Dict[str,int]]):
     candidates = []
@@ -154,43 +161,64 @@ def fetch_price_matrix_from_csv_auto(url: str):
 # --------------------
 st.title("効率よく買い物しよう！")
 
+# 先頭に追加
 SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid={GID}"
-st.markdown(f'<div style="margin-top:6px;"><a href="{SPREADSHEET_URL}" target="_blank">スプレッドシートを開く（編集・表示）</a></div>', unsafe_allow_html=True)
 
+# 画面上部（タイトルのすぐ下など）に表示
+st.markdown(f'<div style="margin-top:6px;"><a href="{SPREADSHEET_URL}" target="_blank" rel="noopener noreferrer">スプレッドシートを開く（編集・表示）</a></div>', unsafe_allow_html=True)
+
+# 価格取得
 try:
     ports, price_matrix = fetch_price_matrix_from_csv_auto(CSV_URL)
 except Exception as e:
-    st.error(f"CSV 読み込み失敗: {e}")
+    st.error(f"スプレッドシート（CSV）からの読み込みに失敗しました: {e}")
     st.stop()
 
+# 中央レイアウト
 col1, col2, col3 = st.columns([1, 2, 1])
-
 with col2:
     current_port = st.selectbox("現在港", ports, index=0)
     cash = numeric_input_optional_strict("所持金", key="cash_input", placeholder="例: 5000", allow_commas=True, min_value=0)
 
-    # お買い得上位5
+    # お買い得上位Nの選定: 現在港の価格 / 基礎値 が小さい順に上位を取る
     item_scores = []
     for name, base in ITEMS:
         buy = price_matrix.get(name, {}).get(current_port, 0)
-        ratio = buy / float(base) if base != 0 and buy > 0 else float("inf")
+        # if buy is zero or missing, treat as very large ratio to de-prioritize
+        try:
+            ratio = buy / float(base) if base != 0 and buy > 0 else float("inf")
+        except Exception:
+            ratio = float("inf")
         item_scores.append((name, buy, base, ratio))
     item_scores.sort(key=lambda t: (t[3], t[1]))
-    top5 = item_scores[:5]
 
-    st.write("在庫入力対象（お買い得上位5）")
+    # UI: 在庫入力対象の上位表示数を可変にする（デフォルト5）
+    max_n = len(ITEMS)
+    top_n = st.slider(
+        "在庫入力対象 上位何品目を表示するか",
+        min_value=1,
+        max_value=max_n,
+        value=5,
+        step=1,
+        key="top_n_items"
+    )
+
+    # 可変化した上位リスト（変数名を top_items に変更）
+    top_items = item_scores[:top_n]
+
+    st.write("在庫入力対象（お買い得上位）")
     stock_inputs = {}
-    for row_start in range(0, len(top5), 2):
+    # 行ごと2カラムで表示（スマホでも順序崩れない）
+    for row_start in range(0, len(top_items), 2):
         c_left, c_right = st.columns(2)
-        name, buy, base, ratio = top5[row_start]
-        pct = int(round((buy - base) / base * 100)) if base != 0 and buy>0 else 0
+        name, buy, base, ratio = top_items[row_start]
+        pct = int(round((buy - base) / base * 100)) if base != 0 and buy > 0 else 0
         label = f"{name}（価格: {buy}, 補正: {pct:+d}%）"
         with c_left:
             stock_inputs[name] = numeric_input_optional_strict(label, key=f"stk_{name}", placeholder="在庫数", allow_commas=True, min_value=0)
-
-        if row_start + 1 < len(top5):
-            name2, buy2, base2, ratio2 = top5[row_start+1]
-            pct2 = int(round((buy2 - base2) / base2 * 100)) if base2 != 0 and buy2>0 else 0
+        if row_start + 1 < len(top_items):
+            name2, buy2, base2, ratio2 = top_items[row_start+1]
+            pct2 = int(round((buy2 - base2) / base2 * 100)) if base2 != 0 and buy2 > 0 else 0
             label2 = f"{name2}（価格: {buy2}, 補正: {pct2:+d}%）"
             with c_right:
                 stock_inputs[name2] = numeric_input_optional_strict(label2, key=f"stk_{name2}", placeholder="在庫数", allow_commas=True, min_value=0)
@@ -201,10 +229,16 @@ with col2:
         if cash is None:
             st.error("所持金を入力してください（空欄不可）。")
         else:
-            invalid_found = any(st.session_state.get(f"stk_{name}_invalid", False) for name in stock_inputs)
+            # 在庫の不正入力フラグチェック
+            invalid_found = False
+            for name in stock_inputs.keys():
+                if st.session_state.get(f"stk_{name}_invalid", False):
+                    st.error(f"{name} の入力が不正です。半角整数で入力してください。")
+                    invalid_found = True
             if invalid_found:
-                st.error("不正入力があります。")
+                st.error("不正入力があるため中止します。")
             else:
+                # current_stock 初期化（全品目 0）、トップNの入力値だけ反映
                 current_stock = {n: 0 for n, _ in ITEMS}
                 for name in stock_inputs:
                     val = stock_inputs.get(name)
@@ -216,31 +250,52 @@ with col2:
                         continue
                     plan, cost, profit = greedy_plan_for_destination(current_port, dest, cash, current_stock, price_matrix)
                     results.append((dest, plan, cost, profit))
-
                 results.sort(key=lambda x: x[3], reverse=True)
                 top_results = results[:top_k]
 
                 if not top_results or all(r[3] <= 0 for r in top_results):
-                    st.info("利益が見込める到着先がありません。")
+                    st.info("所持金・在庫の範囲で利益が見込める到着先が見つかりませんでした。")
                 else:
                     for rank, (dest, plan, cost, profit) in enumerate(top_results, start=1):
+                        # そのまま貼れる置換コード（シンプル）
                         st.markdown(
                             f'''
+                            <style>
+                              .dest-row {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:6px 8px; border-radius:6px; }}
+                              /* ライトモード用 */
+                              @media (prefers-color-scheme: light) {{
+                                .dest-row {{ background: rgba(255,255,255,0.0); }}
+                                .dest-row .label {{ color:#444; }}
+                                .dest-row .value {{ color:#111; }}
+                                .dest-row .sep {{ color:#ccc; }}
+                              }}
+                              /* ダークモード用 */
+                              @media (prefers-color-scheme: dark) {{
+                                .dest-row {{ background: rgba(0,0,0,0.0); }}
+                                .dest-row .label {{ color:#cfcfcf; }}
+                                .dest-row .value {{ color:#ffffff; }}
+                                .dest-row .sep {{ color:#666; }}
+                              }}
+                              /* 強制対策: ブラウザ側で色を上書きされる場合に備えた!important指定 */
+                              .dest-row .label, .dest-row .value, .dest-row .sep {{ -webkit-text-fill-color: initial !important; }}
+                            </style>
+
                             <div class="dest-row">
-                              <span>到着先</span>
-                              <span style="font-weight:700;">{dest}</span>
-                              <span>|</span>
-                              <span>想定利益</span>
-                              <span style="font-weight:700;">{profit:,}</span>
+                              <span class="label" style="font-size:0.85em; margin-right:4px;">到着先</span>
+                              <span class="value" style="font-size:1.15em; font-weight:700;">{dest}</span>
+                              <span class="sep" style="margin:0 8px;">|</span>
+                              <span class="label" style="font-size:0.85em; margin-right:4px;">想定利益</span>
+                              <span class="value" style="font-size:1.15em; font-weight:700;">{profit:,}</span>
                             </div>
                             ''',
                             unsafe_allow_html=True
                         )
 
                         if not plan:
-                            st.write("購入候補なし")
+                            st.write("購入候補がありません（利益が出ない、もしくは在庫不足）。")
                             continue
 
+                        # 購入候補だけを使って DataFrame を作成（余計な列や NaN を生まない）
                         df_rows = []
                         for item, qty, buy, sell, unit_profit in plan:
                             df_rows.append({
@@ -250,17 +305,30 @@ with col2:
                             })
                         df_out = pd.DataFrame(df_rows)
 
+                        # 合計行（数値列は合計、その他はラベル）
                         totals = {
                             "品目": "合計",
-                            "購入数": int(df_out["購入数"].sum()),
-                            "想定利益": int(df_out["想定利益"].sum())
+                            "購入数": int(df_out["購入数"].sum()) if not df_out.empty else 0,
+                            "想定利益": int(df_out["想定利益"].sum()) if not df_out.empty else 0
                         }
                         df_disp = pd.concat([df_out, pd.DataFrame([totals])], ignore_index=True)
 
-                        st.dataframe(df_disp, height=max(200, 40 * (len(df_disp) + 1)))
+                        # フォーマットして表示（行数に応じた高さを指定）
+                        try:
+                            num_format = {
+                                "購入数": "{:,.0f}",
+                                "想定利益": "{:,.0f}"
+                            }
+                            styled = df_disp.style.format(num_format, na_rep="")
+                            st.dataframe(styled, height=max(200, 40 * (len(df_disp) + 1)))
+                        except Exception:
+                            st.table(df_disp)
+
+                        st.write("---")
 
 with col3:
     if st.checkbox("価格表を表示"):
+        # 表示用 DataFrame を作る
         rows = []
         for name, _ in ITEMS:
             row = {"品目": name}
