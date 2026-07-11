@@ -123,6 +123,9 @@ def fetch_price_matrix_from_csv_auto(url: str):
     s = r.content.decode("utf-8")
     df = pd.read_csv(StringIO(s))
 
+    # ★ Unnamed 列を自動除去（ここが重要）
+    df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+    
     # 行＝品目、列＝港 → 必ず転置する
     item_col = df.columns[0]
     df_items = df.set_index(item_col)
